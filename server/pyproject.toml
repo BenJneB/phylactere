@@ -1,0 +1,46 @@
+[project]
+name = "phylactere"
+version = "0.1.0"
+description = "Serveur local de traduction des webtoons de comic.naver.com (OCR + LLM local)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    # Sans [standard] : cet extra installerait uvloop, exclu (voir SPEC 7.1).
+    "uvicorn>=0.32",
+    "httpx>=0.28",
+    "platformdirs>=4.3",
+    "tomlkit>=0.13",
+]
+
+[project.optional-dependencies]
+# PaddlePaddle sera ajouté au jalon 2 : version CPU (PyPI) ou GPU (index PaddlePaddle).
+cpu = []
+gpu = []
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.2",
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "smoke: lance le vrai serveur dans un sous-processus",
+    "ocr: charge PaddleOCR (à partir du jalon 2)",
+]

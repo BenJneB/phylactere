@@ -1,0 +1,14 @@
+# Surcharges pour le développement sur Ubuntu.
+# Utilisé via PHYLACTERE_CONFIG (scripts/start.sh le positionne automatiquement).
+# Ne contient que les valeurs à changer, et jamais de jeton : le jeton reste
+# dans le config.toml du dossier utilisateur.
+
+[server]
+log_level = "debug"
+
+[ollama]
+# Petit modèle, suffisant pour développer sans GPU.
+model = "qwen3:1.7b"
+
+[ocr]
+device = "cpu"
