@@ -1,0 +1,29 @@
+# Configuration de Phylactère.
+#
+# Au premier lancement, ce fichier est copié dans le dossier utilisateur :
+#   Windows : %LOCALAPPDATA%\phylactere\config.toml
+#   Linux   : ~/.config/phylactere/config.toml
+# et un jeton aléatoire y est écrit. Les clés absentes du fichier utilisateur
+# prennent la valeur indiquée ici.
+
+[server]
+# Le serveur écoute toujours sur 127.0.0.1 ; seul le port est réglable.
+port = 8765
+# Jeton à saisir dans le popup de l'extension (en-tête X-Phylactere-Token).
+# Laisser vide : il est généré au premier lancement.
+token = ""
+# critical, error, warning, info ou debug
+log_level = "info"
+
+[ollama]
+url = "http://127.0.0.1:11434"
+# Provisoire : le modèle par défaut sera choisi au jalon 4, sur mesures.
+model = "qwen3:8b"
+
+[translation]
+# Langue cible par défaut (code ISO 639-1)
+target_lang = "fr"
+
+[ocr]
+# "gpu" (carte NVIDIA) ou "cpu"
+device = "cpu"

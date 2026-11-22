@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Webtoon Translator – Naver",
+  "version": "1.0.0",
+  "description": "Traduit en temps réel les bulles des webtoons de comic.naver.com (OCR Google Vision + Google Translate).",
+  "permissions": ["storage", "declarativeNetRequest", "unlimitedStorage"],
+  "host_permissions": [
+    "https://comic.naver.com/*",
+    "https://image-comic.pstatic.net/*",
+    "https://vision.googleapis.com/*",
+    "https://translation.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://comic.naver.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Webtoon Translator"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "webtoon-translator@local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

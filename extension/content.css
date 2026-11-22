@@ -1,0 +1,46 @@
+.wtt-layer {
+  position: absolute;
+  z-index: 2147483000;
+  pointer-events: none;
+}
+.wtt-layer.wtt-hidden { display: none; }
+
+.wtt-bubble {
+  all: initial;
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  background: #fff;
+  color: #000;
+  border-radius: 14px;
+  font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  font-weight: 700;
+  line-height: 1.12;
+  text-align: center;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+/* Clic sur une bulle : affiche le texte original dessous */
+.wtt-bubble.wtt-peek { opacity: 0; }
+
+.wtt-badge {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483001;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: #1d2a44;
+  color: #fff;
+  font: 600 12px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.wtt-badge.wtt-badge-error { background: #a3262b; }

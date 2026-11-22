@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #f3f5fa; --ink: #1d2a44; --muted: #5d6a85; --field: #fff;
+    --line: #cfd6e4; --accent: #2f5bd3; --ok: #1f7a4d; --err: #a3262b;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161c2a; --ink: #e8ecf5; --muted: #9aa6bf; --field: #222a3b;
+      --line: #36415a; --accent: #7d9bff; --ok: #5fd39a; --err: #ff8a8f;
+      color-scheme: dark;
+    }
+  }
+  body { width: 300px; margin: 0; padding: 16px; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, sans-serif; }
+  h1 { margin: 0 0 4px; font-size: 17px; }
+  .bubble { position: relative; display: inline-block; padding: 6px 12px; margin-bottom: 14px;
+            background: var(--field); border: 2px solid var(--ink); border-radius: 18px; }
+  .bubble::after { content: ""; position: absolute; left: 22px; bottom: -9px; width: 12px; height: 12px;
+                   background: var(--field); border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink);
+                   transform: rotate(45deg); }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; }
+  input[type=password], select { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--line);
+                                 border-radius: 6px; background: var(--field); color: var(--ink); font: inherit; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+  .row label { margin: 0; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .actions { display: flex; gap: 8px; margin-top: 16px; }
+  button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+  #save { background: var(--accent); color: #fff; }
+  #clear { background: transparent; color: var(--accent); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { min-height: 18px; margin-top: 10px; font-size: 12px; }
+  .ok { color: var(--ok); } .err { color: var(--err); }
+</style>
+</head>
+<body>
+  <div class="bubble"><h1>Webtoon Translator</h1></div>
+
+  <div class="row">
+    <input type="checkbox" id="enabled">
+    <label for="enabled">Traduire les épisodes Naver</label>
+  </div>
+
+  <label for="apiKey">Clé API Google Cloud</label>
+  <input type="password" id="apiKey" autocomplete="off" placeholder="AIza…">
+  <div class="hint">Cloud Vision API et Cloud Translation API doivent être activées pour cette clé.</div>
+
+  <label for="targetLang">Traduire vers</label>
+  <select id="targetLang">
+    <option value="fr">Français</option>
+    <option value="en">Anglais</option>
+    <option value="es">Espagnol</option>
+    <option value="de">Allemand</option>
+    <option value="it">Italien</option>
+    <option value="pt">Portugais</option>
+    <option value="ja">Japonais</option>
+    <option value="zh-CN">Chinois simplifié</option>
+    <option value="ar">Arabe</option>
+    <option value="vi">Vietnamien</option>
+    <option value="id">Indonésien</option>
+  </select>
+
+  <div class="actions">
+    <button id="save">Enregistrer</button>
+    <button id="clear">Vider le cache</button>
+  </div>
+  <div id="status"></div>
+  <div class="hint">Sur la page : Alt+T ou clic sur le badge pour revoir l’original, clic sur une bulle pour la masquer.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
