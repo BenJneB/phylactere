@@ -5,20 +5,76 @@ Lit le port dans la configuration et écoute toujours sur 127.0.0.1.
 
 import argparse
 import sys
+import time
+from pathlib import Path
 
 import uvicorn
 
 from phylactere import __version__
-from phylactere.config import ConfigError, load_settings, override_path, user_config_path
+from phylactere.config import (
+    ConfigError,
+    Settings,
+    load_settings,
+    override_path,
+    user_config_path,
+)
 
 HOST = "127.0.0.1"
+CHECK_IMAGE = Path(__file__).resolve().parent.parent / "tests" / "data" / "korean_sample.png"
+CHECK_EXPECTED = "안녕하세요"
+
+
+def use_utf8_output() -> None:
+    """Force l'UTF-8 sur stdout/stderr.
+
+    Sous Windows, quand la sortie est redirigée (CI, fichier, tube), Python utilise
+    l'encodage historique cp1252, qui ne contient pas le hangul : print() planterait.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def check_ocr(settings: Settings) -> int:
+    """Charge PaddleOCR et lit une image de test : vérifie l'installation (et le GPU)."""
+    from PIL import Image
+
+    from phylactere.ocr import PaddleDetector, run_pipeline
+
+    print("Chargement de PaddleOCR (les modèles sont téléchargés au premier lancement)…")
+    start = time.perf_counter()
+    try:
+        detector = PaddleDetector(settings.ocr)
+    except Exception as exc:
+        print(f"ÉCHEC du chargement : {exc}", file=sys.stderr)
+        return 1
+    print(f"Chargé en {time.perf_counter() - start:.1f} s, appareil : {detector.device.upper()}")
+
+    image = Image.open(CHECK_IMAGE)
+    run_pipeline(image, detector, settings.ocr, settings.grouping)  # préchauffage
+    start = time.perf_counter()
+    result = run_pipeline(image, detector, settings.ocr, settings.grouping)
+    print(f"OCR de l'image de test : {time.perf_counter() - start:.2f} s")
+    for bubble in result.bubbles:
+        print(f"  - {bubble.text}")
+    if not result.bubbles or CHECK_EXPECTED not in result.bubbles[0].text:
+        print("ÉCHEC : le texte coréen attendu n'a pas été reconnu.", file=sys.stderr)
+        return 1
+    print("OCR opérationnel.")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    use_utf8_output()
     parser = argparse.ArgumentParser(prog="phylactere", description="Serveur local Phylactère")
     parser.add_argument("--port", type=int, help="remplace le port de la configuration")
     parser.add_argument(
         "--reload", action="store_true", help="redémarre à chaque modification du code (dev)"
+    )
+    parser.add_argument(
+        "--check-ocr",
+        action="store_true",
+        help="vérifie l'OCR (et le GPU) sur une image de test, sans lancer le serveur",
     )
     args = parser.parse_args(argv)
 
@@ -27,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"Erreur de configuration : {exc}", file=sys.stderr)
         return 1
+
+    if args.check_ocr:
+        return check_ocr(settings)
 
     port = args.port or settings.server.port
     print(f"Phylactère {__version__}")

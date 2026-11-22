@@ -90,3 +90,13 @@ def test_invalid_user_config_raises_config_error(isolated_config, content):
 
     with pytest.raises(ConfigError):
         load_settings()
+
+
+def test_default_settings_does_not_touch_user_dir(isolated_config):
+    from phylactere.config import default_settings
+
+    settings = default_settings()
+
+    assert settings.server.token == ""
+    assert settings.ocr.recognition_model.startswith("korean_")
+    assert not isolated_config.exists()

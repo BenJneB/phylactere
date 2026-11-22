@@ -40,26 +40,46 @@ else {
     Write-Step "uv installé : $(uv --version)"
 }
 
-# 2. Python 3.12 et dépendances du serveur (sans les outils de dev)
-Write-Step 'Installation de Python 3.12 et des dépendances du serveur'
-& uv --directory $ServerDir sync --no-dev --extra cpu
-if ($LASTEXITCODE -ne 0) { throw "uv sync a échoué (code $LASTEXITCODE)." }
-
-# 3. Carte graphique NVIDIA (le moteur OCR sera installé au jalon 2)
+# 2. Carte NVIDIA : PaddlePaddle GPU si le pilote supporte CUDA 12.6, sinon CPU
+$MinCuda = [version]'12.6'
+$Extra = 'cpu'
 Write-Step 'Recherche d''une carte NVIDIA'
 if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-    $gpus = & nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
-    if ($LASTEXITCODE -eq 0 -and $gpus) {
-        foreach ($gpu in $gpus) { Write-Host "    Carte détectée : $gpu" }
+    $smi = & nvidia-smi | Out-String
+    $gpuName = (& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1)
+    if ($LASTEXITCODE -eq 0 -and $smi -match 'CUDA Version:\s*(\d+)\.(\d+)') {
+        $driverCuda = [version]"$($Matches[1]).$($Matches[2])"
+        Write-Host "    Carte détectée : $gpuName (le pilote supporte CUDA $driverCuda)"
+        if ($driverCuda -ge $MinCuda) {
+            $Extra = 'gpu'
+        }
+        else {
+            Write-Host "    Pilote trop ancien (CUDA $MinCuda minimum) : l'OCR tournera sur le processeur." -ForegroundColor Yellow
+            Write-Host '    Mets à jour le pilote NVIDIA puis relance ce script pour utiliser la carte.' -ForegroundColor Yellow
+        }
     }
     else {
-        Write-Host '    nvidia-smi est présent mais ne répond pas : vérifie le pilote NVIDIA.' -ForegroundColor Yellow
+        Write-Host '    nvidia-smi ne répond pas : vérifie le pilote NVIDIA. L''OCR tournera sur le processeur.' -ForegroundColor Yellow
     }
 }
 else {
     Write-Host '    Aucune carte NVIDIA détectée : l''OCR tournera sur le processeur.' -ForegroundColor Yellow
 }
-Write-Host '    (Le moteur OCR PaddlePaddle n''est pas encore installé par ce script.)'
+
+# 3. Python 3.12 et dépendances du serveur (sans les outils de dev)
+if ($Extra -eq 'gpu') {
+    Write-Step 'Installation de Python 3.12 et des dépendances, avec PaddlePaddle GPU (plusieurs Go au premier lancement)'
+}
+else {
+    Write-Step 'Installation de Python 3.12 et des dépendances, avec PaddlePaddle CPU'
+}
+& uv --directory $ServerDir sync --no-dev --extra $Extra
+if ($LASTEXITCODE -ne 0) { throw "uv sync a échoué (code $LASTEXITCODE)." }
+
+# 4. Vérification : chargement de PaddleOCR (télécharge les modèles) et lecture d'une image de test
+Write-Step 'Vérification de l''OCR'
+& uv --directory $ServerDir run --no-sync python -m phylactere --check-ocr
+if ($LASTEXITCODE -ne 0) { throw "La vérification de l'OCR a échoué (voir les messages ci-dessus)." }
 
 Write-Host ''
 Write-Host 'Installation terminée. Lance le serveur avec :' -ForegroundColor Green

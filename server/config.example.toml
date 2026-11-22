@@ -25,5 +25,34 @@ model = "qwen3:8b"
 target_lang = "fr"
 
 [ocr]
-# "gpu" (carte NVIDIA) ou "cpu"
-device = "cpu"
+# "auto" (GPU si PaddlePaddle GPU est installé et qu'une carte NVIDIA répond, sinon CPU),
+# "gpu" ou "cpu"
+device = "auto"
+# Modèles PaddleOCR. La reconnaissance doit être un modèle coréen (korean_*) :
+# les modèles par défaut de PaddleOCR ne lisent pas le coréen.
+detection_model = "PP-OCRv5_mobile_det"
+recognition_model = "korean_PP-OCRv5_mobile_rec"
+# Lignes ignorées sous ce score de confiance (0 à 1)
+min_confidence = 0.5
+# Les images hautes sont découpées en tranches qui se chevauchent (en pixels)
+slice_height = 1200
+slice_overlap = 120
+# Deux lignes vues dans deux tranches sont des doublons au-delà de ce recouvrement (0 à 1)
+dedup_overlap = 0.5
+# Une bulle à moins de cette distance (px) du bord haut ou bas est signalée
+# comme possiblement coupée entre deux images
+edge_margin = 8
+
+[grouping]
+# Écart vertical maximal entre deux lignes d'une même bulle, en hauteurs de ligne médianes
+max_vertical_gap = 0.8
+# Recouvrement horizontal minimal, en fraction de la ligne la plus étroite...
+min_horizontal_overlap = 0.3
+# ...ou écart maximal entre les centres, en fraction de la ligne la plus étroite
+max_center_offset = 0.6
+
+[fetch]
+# Seuls ces hôtes sont autorisés (HTTPS uniquement)
+allowed_hosts = ["image-comic.pstatic.net"]
+max_bytes = 20_000_000
+timeout_s = 15

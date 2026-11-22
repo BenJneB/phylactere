@@ -73,9 +73,9 @@ phylactere/
 
 ### 5.1 API
 
-`GET /health` → `{ "ok": true, "ocr": "ready|loading|error|disabled", "ollama": "ok|down", "model": "…", "device": "gpu|cpu", "version": "…" }`
+`GET /health` → `{ "ok": true, "ocr": "ready|loading|error", "ollama": "ok|down", "model": "…", "device": "gpu|cpu|auto", "version": "…" }`
 
-`ocr` vaut `disabled` tant que l'OCR n'est pas implémenté (jalon 1).
+Le modèle OCR se charge en arrière-plan au démarrage : `ocr` vaut `loading` pendant ce temps, et `device` vaut `auto` tant que l'appareil réellement utilisé n'est pas connu.
 
 `GET /models` → liste des modèles Ollama installés (proxy de `GET /api/tags`).
 
@@ -107,6 +107,8 @@ Coordonnées en pixels de l'image d'origine.
 
 `DELETE /cache` : vide le cache (option `?series_id=`).
 
+`POST /debug/ocr` (outil de mise au point) : formulaire `multipart/form-data` avec soit `image_url` (téléchargée comme pour `/translate`, allowlist comprise), soit `file` (image envoyée). Renvoie un PNG annoté : lignes en rouge, bulles en vert et numérotées, bulles touchant le bord de l'image en orange. Avec `?format=json`, renvoie `{ "image_size": …, "bubbles": [ { "box", "text", "lines", "edges" } ] }`.
+
 ### 5.2 Sécurité
 
 - Écoute uniquement sur 127.0.0.1.
@@ -117,9 +119,15 @@ Coordonnées en pixels de l'image d'origine.
 ### 5.3 OCR
 
 - PaddleOCR 3.x avec `lang="korean"`, **obligatoire** : le modèle par défaut des versions récentes ne couvre pas le coréen et donne des résultats inutilisables. Désactiver `use_doc_orientation_classify`, `use_doc_unwarping` et `use_textline_orientation`.
+- **Piège constaté (PaddleOCR 3.7)** : dès qu'un nom de modèle est fourni, `lang` est ignoré. Imposer un seul nom (par exemple le détecteur) fait charger un modèle de reconnaissance non coréen (`PP-OCRv6_medium_rec`), sans erreur. Les deux noms sont donc toujours imposés (`detection_model`, `recognition_model`), et la configuration refuse une reconnaissance qui n'est pas `korean_*`.
+- Modèles par défaut : détection `PP-OCRv5_mobile_det`, reconnaissance `korean_PP-OCRv5_mobile_rec`. Mesuré sur 8 bandes réelles (CPU) : même qualité que `PP-OCRv5_server_det` pour un temps 10 fois moindre (1,3 s contre 13,4 s) ; `PP-OCRv6_small_det` manque des onomatopées.
+- Sur CPU, l'accélération oneDNN (`enable_mkldnn`) est désactivée : avec PaddlePaddle 3.3 elle plante sur ces modèles.
+- Les modèles sont téléchargés au premier lancement dans le dossier de cache `platformdirs` (`PADDLE_PDX_CACHE_HOME`).
 - Les images Naver sont étroites et très hautes. Découper en tranches d'environ 1200 px de haut avec 120 px de chevauchement, lancer l'OCR par tranche, recaler les coordonnées, puis dédoublonner les lignes présentes dans deux tranches (recouvrement de boîtes > 50 % → garder la meilleure confiance).
 - Filtrer : ignorer les lignes sans caractère hangul et celles de confiance < 0,5 (seuils configurables).
 - Le modèle est chargé une seule fois au démarrage. L'OCR tourne dans un seul worker (thread) pour ne pas saturer le GPU.
+- Naver découpe chaque épisode en bandes de 690 × 1600 px : une bulle peut être coupée entre deux images. L'OCR signale les bulles qui touchent le bord haut ou bas (`edges`, marge configurable) ; leur recollage avec l'image voisine relève du jalon 3.
+- Appareil : `device = "auto"` (par défaut) utilise le GPU si PaddlePaddle a été installé avec CUDA et qu'une carte répond, sinon le CPU. `python -m phylactere --check-ocr` vérifie l'installation sur une image de test.
 
 ### 5.4 Regroupement en bulles (`grouping.py`)
 
@@ -140,7 +148,7 @@ Les seuils sont dans la configuration. Une amélioration ultérieure possible es
 - Contexte : ajouter les 15 dernières bulles déjà traduites du même épisode (original + traduction) pour la cohérence du ton et des noms.
 - Glossaire de la série injecté dans le prompt.
 - Si la réponse n'est pas un JSON valide ou si des `id` manquent : une nouvelle tentative, puis traduction bulle par bulle pour les manquantes.
-- Le modèle est configurable. Candidats à comparer au jalon 4 : un modèle Qwen3 de taille adaptée à la VRAM, Gemma, translategemma. Le choix par défaut se fait sur la base de mesures, pas a priori.
+- Le modèle est configurable. Candidats à comparer au jalon 4 : un modèle Qwen3 de taille adaptée à la VRAM (8 Go par défaut, voir section 8), Gemma, translategemma. Le choix par défaut se fait sur la base de mesures, pas a priori.
 
 ### 5.6 Cache et files
 
@@ -149,7 +157,7 @@ Les seuils sont dans la configuration. Une amélioration ultérieure possible es
 
 ### 5.7 Configuration (`config.toml`)
 
-Port, jeton, URL Ollama, modèle, langue cible par défaut, appareil OCR (`gpu`/`cpu`), seuils OCR et regroupement, taille des tranches, allowlist d'hôtes, chemin du cache, niveau de log.
+Port, jeton, URL Ollama, modèle, langue cible par défaut, appareil OCR (`auto`/`gpu`/`cpu`), modèles OCR, seuils OCR et regroupement, taille des tranches, allowlist d'hôtes, chemin du cache, niveau de log.
 
 Emplacement : dossier utilisateur donné par `platformdirs` (`%LOCALAPPDATA%\phylactere` sous Windows, `~/.config/phylactere` sous Linux), créé au premier lancement à partir de `config.example.toml`. La variable d'environnement `PHYLACTERE_CONFIG_DIR` permet de déplacer ce dossier (tests, CI).
 
@@ -177,7 +185,8 @@ Point de départ : l'extension v1 existante (OCR Google Vision + Google Translat
 - Fichiers texte ouverts avec `encoding="utf-8"` explicite (l'encodage par défaut de Windows n'est pas UTF-8).
 - Pas de dépendance propre à Linux (signaux Unix, `fork`, `uvloop`…). Uvicorn sans `--workers` multiples.
 - Dépendances Python : uniquement des paquets avec wheel Windows x64 pour Python 3.12.
-- PaddlePaddle n'est pas dans les dépendances principales : il est installé via des extras `cpu` / `gpu` de `pyproject.toml`, car la version GPU dépend de la machine (CUDA) et vient de l'index officiel de PaddlePaddle. Le fichier `uv.lock` versionné ne doit pas imposer la version GPU.
+- PaddlePaddle n'est pas dans les dépendances principales : il est installé via des extras `cpu` / `gpu` de `pyproject.toml`, déclarés en conflit pour uv. **Décision du jalon 2** (écart avec la version initiale, qui voulait un lock sans version GPU) : l'extra `gpu` est figé dans `uv.lock` sur une seule variante, `paddlepaddle-gpu` cu126 de l'index officiel de PaddlePaddle. Il suffit d'un pilote NVIDIA qui supporte CUDA ≥ 12.6 ; les bibliothèques CUDA arrivent en paquets pip (pas de CUDA Toolkit). L'installation est reproductible et évite les conflits de versions (numpy) d'une installation hors lock.
+- uv lit les dépendances de `paddlepaddle-gpu` dans sa wheel Linux, où les bibliothèques CUDA sont réservées à Linux : celles de la wheel Windows sont donc déclarées explicitement dans l'extra `gpu` (marqueur `sys_platform == 'win32'`).
 - Scripts PowerShell compatibles Windows PowerShell 5.1, encodés en UTF-8 avec BOM. Exécution prévue via `powershell -ExecutionPolicy Bypass -File …` (documenté dans le README) pour éviter le blocage des scripts non signés.
 - `.gitattributes` : `* text=auto eol=lf`, sauf `*.ps1 text eol=crlf` et `*.bat text eol=crlf`.
 
@@ -202,7 +211,7 @@ Le README doit couvrir, pas à pas et en français :
 
 1. Installer Ollama (installeur Windows) et télécharger le modèle choisi.
 2. Installer git, cloner le dépôt.
-3. Lancer `scripts/install.ps1`, qui installe uv si besoin, Python 3.12, les dépendances, puis PaddlePaddle : version GPU depuis l'index officiel de PaddlePaddle correspondant à la version CUDA du pilote (le paquet `paddlepaddle-gpu` de PyPI est obsolète et ne convient pas à PaddleOCR 3.x), ou version CPU si aucune carte NVIDIA n'est détectée (`nvidia-smi`). Le script vérifie ensuite que le GPU est bien utilisé.
+3. Lancer `scripts/install.ps1`, qui installe uv si besoin, Python 3.12, les dépendances, puis PaddlePaddle : version GPU (extra `gpu`, index officiel de PaddlePaddle ; le paquet `paddlepaddle-gpu` de PyPI est obsolète et ne convient pas à PaddleOCR 3.x) si `nvidia-smi` indique un pilote qui supporte CUDA ≥ 12.6, sinon version CPU. Le script lance ensuite `python -m phylactere --check-ocr`, qui télécharge les modèles et vérifie que l'OCR fonctionne et sur quel appareil.
 4. `scripts/start.ps1` lance le serveur et affiche le jeton.
 5. Charger l'extension dans Chrome et Firefox.
 6. Optionnel : démarrage automatique avec `install-autostart.ps1`.
@@ -210,7 +219,9 @@ Le README doit couvrir, pas à pas et en français :
 
 ## 8. Performances visées
 
-Sur un PC avec carte NVIDIA 12 Go :
+Le produit doit fonctionner sur une carte NVIDIA de 8 Go comme de 16 Go (le PC de référence a une RTX 3070 portable, 8 Go). L'OCR occupe 1 à 2 Go de mémoire vidéo : le modèle de traduction par défaut doit tenir dans le reste sur une carte de 8 Go, un modèle plus grand restant configurable pour 16 Go.
+
+Objectifs :
 - OCR : < 0,5 s par image (GPU), < 4 s (CPU).
 - Traduction : < 8 s par image de 10 bulles.
 - Première image visible traduite < 15 s après l'ouverture de l'épisode, puis aucune attente en lecture normale grâce au préchargement.

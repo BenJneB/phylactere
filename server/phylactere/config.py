@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 import platformdirs
 import tomlkit
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 APP_NAME = "phylactere"
 ENV_CONFIG = "PHYLACTERE_CONFIG"
@@ -47,7 +47,39 @@ class TranslationConfig(_Section):
 
 
 class OcrConfig(_Section):
-    device: Literal["gpu", "cpu"]
+    device: Literal["auto", "gpu", "cpu"]
+    detection_model: str
+    recognition_model: str
+    min_confidence: float = Field(ge=0, le=1)
+    slice_height: int = Field(ge=200)
+    slice_overlap: int = Field(ge=0)
+    dedup_overlap: float = Field(gt=0, le=1)
+    edge_margin: int = Field(ge=0)
+
+    @field_validator("recognition_model")
+    @classmethod
+    def _korean_only(cls, value: str) -> str:
+        if not value.startswith("korean_"):
+            raise ValueError("le modèle de reconnaissance doit être coréen (korean_…)")
+        return value
+
+    @model_validator(mode="after")
+    def _overlap_smaller_than_slice(self) -> "OcrConfig":
+        if self.slice_overlap >= self.slice_height:
+            raise ValueError("slice_overlap doit être inférieur à slice_height")
+        return self
+
+
+class GroupingConfig(_Section):
+    max_vertical_gap: float = Field(gt=0)
+    min_horizontal_overlap: float = Field(ge=0, le=1)
+    max_center_offset: float = Field(ge=0)
+
+
+class FetchConfig(_Section):
+    allowed_hosts: list[str] = Field(min_length=1)
+    max_bytes: int = Field(gt=0)
+    timeout_s: float = Field(gt=0)
 
 
 class Settings(_Section):
@@ -55,6 +87,13 @@ class Settings(_Section):
     ollama: OllamaConfig
     translation: TranslationConfig
     ocr: OcrConfig
+    grouping: GroupingConfig
+    fetch: FetchConfig
+
+
+def cache_dir() -> Path:
+    """Dossier de cache (modèles OCR, puis cache SQLite au jalon 3)."""
+    return Path(platformdirs.user_cache_dir(APP_NAME, appauthor=False))
 
 
 def config_dir() -> Path:
@@ -130,3 +169,11 @@ def load_settings() -> Settings:
         return Settings.model_validate(data)
     except ValidationError as exc:
         raise ConfigError(f"Configuration invalide :\n{exc}") from exc
+
+
+def default_settings() -> Settings:
+    """Valeurs par défaut seules (config.example.toml), sans toucher au dossier utilisateur."""
+    try:
+        return Settings.model_validate(_read_toml(EXAMPLE_PATH))
+    except ValidationError as exc:
+        raise ConfigError(f"config.example.toml invalide :\n{exc}") from exc
