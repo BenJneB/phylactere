@@ -19,7 +19,7 @@ from typing import Literal, Protocol
 import numpy as np
 from PIL import Image
 
-from phylactere.config import GroupingConfig, OcrConfig, cache_dir
+from phylactere.config import GroupingConfig, OcrConfig, cache_dir, user_config_path
 from phylactere.grouping import group_lines, mark_edges
 from phylactere.schemas import Box, ImageSize, Line, OcrResult
 
@@ -112,6 +112,7 @@ class PaddleDetector:
             from paddleocr import PaddleOCR
 
         gpu_ready = paddle.device.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0
+        self.gpu_available = gpu_ready
         if cfg.device == "gpu" and not gpu_ready:
             raise RuntimeError(
                 "GPU demandé mais indisponible (PaddlePaddle sans CUDA, ou carte NVIDIA "
@@ -155,6 +156,17 @@ class PaddleDetector:
         return lines
 
 
+def unused_gpu_warning(detector: object, cfg: OcrConfig) -> str | None:
+    """Message si une carte NVIDIA est utilisable mais que l'OCR tourne sur le CPU."""
+    if getattr(detector, "device", None) != "cpu" or not getattr(detector, "gpu_available", False):
+        return None
+    return (
+        f'Une carte NVIDIA est utilisable mais l\'OCR tourne sur le CPU (device = "{cfg.device}"). '
+        f'Pour l\'utiliser : mets device = "auto" dans {user_config_path()}, '
+        "ou supprime cette ligne."
+    )
+
+
 class OcrEngine:
     """Charge le détecteur en arrière-plan et exécute l'OCR dans un thread unique."""
 
@@ -184,6 +196,8 @@ class OcrEngine:
             self.device = getattr(self._detector, "device", self._ocr_cfg.device)
             self.status = "ready"
             logger.info("PaddleOCR prêt (%s).", self.device)
+            if (warning := unused_gpu_warning(self._detector, self._ocr_cfg)) is not None:
+                logger.warning(warning)
         except Exception as exc:
             self.error = str(exc)
             self.status = "error"

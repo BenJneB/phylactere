@@ -1,10 +1,10 @@
-# Configuration de Phylactère.
+# Configuration de Phylactère : valeurs par défaut (ne pas modifier ce fichier).
 #
-# Au premier lancement, ce fichier est copié dans le dossier utilisateur :
+# Les réglages personnels vont dans le fichier utilisateur, créé au premier lancement
+# avec seulement le jeton :
 #   Windows : %LOCALAPPDATA%\phylactere\config.toml
 #   Linux   : ~/.config/phylactere/config.toml
-# et un jeton aléatoire y est écrit. Les clés absentes du fichier utilisateur
-# prennent la valeur indiquée ici.
+# N'y écrire que les valeurs à changer, dans leur section ; les autres viennent d'ici.
 
 [server]
 # Le serveur écoute toujours sur 127.0.0.1 ; seul le port est réglable.

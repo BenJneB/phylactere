@@ -2,7 +2,13 @@ import tomllib
 
 import pytest
 
-from phylactere.config import ENV_CONFIG, ConfigError, load_settings, user_config_path
+from phylactere.config import (
+    ENV_CONFIG,
+    EXAMPLE_PATH,
+    ConfigError,
+    load_settings,
+    user_config_path,
+)
 
 
 def read_user_config() -> dict:
@@ -18,9 +24,25 @@ def test_first_launch_creates_user_config_with_token(isolated_config):
     assert read_user_config()["server"]["token"] == settings.server.token
 
 
-def test_user_config_keeps_example_comments():
+def test_new_user_config_contains_only_the_token():
     load_settings()
-    assert "# Jeton à saisir" in user_config_path().read_text(encoding="utf-8")
+
+    text = user_config_path().read_text(encoding="utf-8")
+    assert "# Jeton à saisir" in text
+    assert set(read_user_config()) == {"server"}
+    assert set(read_user_config()["server"]) == {"token"}
+
+
+def test_new_defaults_reach_existing_user_config(isolated_config, monkeypatch, tmp_path):
+    # Le fichier utilisateur ne fige pas les valeurs par défaut : un changement de
+    # config.example.toml (nouvelle version) s'applique aux installations existantes.
+    load_settings()
+    example = tmp_path / "example.toml"
+    text = EXAMPLE_PATH.read_text(encoding="utf-8").replace('device = "auto"', 'device = "gpu"')
+    example.write_text(text, encoding="utf-8")
+    monkeypatch.setattr("phylactere.config.EXAMPLE_PATH", example)
+
+    assert load_settings().ocr.device == "gpu"
 
 
 def test_token_is_reused_on_next_launch():
