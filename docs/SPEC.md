@@ -159,7 +159,7 @@ Les seuils sont dans la configuration. Une amélioration ultérieure possible es
 
 Port, jeton, URL Ollama, modèle, langue cible par défaut, appareil OCR (`auto`/`gpu`/`cpu`), modèles OCR, seuils OCR et regroupement, taille des tranches, allowlist d'hôtes, chemin du cache, niveau de log.
 
-Emplacement : dossier utilisateur donné par `platformdirs` (`%LOCALAPPDATA%\phylactere` sous Windows, `~/.config/phylactere` sous Linux), créé au premier lancement à partir de `config.example.toml`. La variable d'environnement `PHYLACTERE_CONFIG_DIR` permet de déplacer ce dossier (tests, CI).
+Emplacement : dossier utilisateur donné par `platformdirs` (`%LOCALAPPDATA%\phylactere` sous Windows, `~/.config/phylactere` sous Linux), créé au premier lancement avec **seulement le jeton** : les autres valeurs viennent de `config.example.toml`, et l'utilisateur n'y écrit que celles qu'il change. (Une copie complète de l'exemple, comme au jalon 1, figeait les valeurs par défaut : un nouveau défaut, comme `device = "auto"`, n'atteignait plus les installations existantes.) La variable d'environnement `PHYLACTERE_CONFIG_DIR` permet de déplacer ce dossier (tests, CI).
 
 Trois niveaux, du moins au plus prioritaire :
 1. `config.example.toml` : valeurs par défaut (une clé absente du fichier utilisateur prend cette valeur) ;

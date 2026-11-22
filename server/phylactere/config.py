@@ -131,12 +131,28 @@ def _merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+# Contenu du config.toml créé au premier lancement : seulement le jeton. Les autres valeurs
+# viennent de config.example.toml ; les recopier ici les figerait, et une nouvelle valeur
+# par défaut ne serait plus prise en compte.
+USER_CONFIG_TEMPLATE = """\
+# Configuration de Phylactère, créée au premier lancement.
+#
+# Toutes les valeurs par défaut, avec leur description, sont dans
+# server/config.example.toml. N'écrire ici que celles à changer, dans leur section.
+# Exemple :
+#
+# [ocr]
+# device = "cpu"
+
+[server]
+# Jeton à saisir dans le popup de l'extension (en-tête X-Phylactere-Token).
+token = ""
+"""
+
+
 def ensure_user_config(path: Path) -> None:
-    """Crée le config.toml utilisateur à partir de l'exemple et y écrit un jeton s'il manque."""
-    if path.exists():
-        text = path.read_text(encoding="utf-8")
-    else:
-        text = EXAMPLE_PATH.read_text(encoding="utf-8")
+    """Crée le config.toml utilisateur (jeton seul) et y écrit un jeton s'il manque."""
+    text = path.read_text(encoding="utf-8") if path.exists() else USER_CONFIG_TEMPLATE
     try:
         doc = tomlkit.parse(text)
     except tomlkit.exceptions.ParseError as exc:

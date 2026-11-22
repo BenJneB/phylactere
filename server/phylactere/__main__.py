@@ -39,7 +39,7 @@ def check_ocr(settings: Settings) -> int:
     """Charge PaddleOCR et lit une image de test : vérifie l'installation (et le GPU)."""
     from PIL import Image
 
-    from phylactere.ocr import PaddleDetector, run_pipeline
+    from phylactere.ocr import PaddleDetector, run_pipeline, unused_gpu_warning
 
     print("Chargement de PaddleOCR (les modèles sont téléchargés au premier lancement)…")
     start = time.perf_counter()
@@ -48,7 +48,12 @@ def check_ocr(settings: Settings) -> int:
     except Exception as exc:
         print(f"ÉCHEC du chargement : {exc}", file=sys.stderr)
         return 1
-    print(f"Chargé en {time.perf_counter() - start:.1f} s, appareil : {detector.device.upper()}")
+    print(
+        f"Chargé en {time.perf_counter() - start:.1f} s, appareil : {detector.device.upper()}"
+        f' (réglage device = "{settings.ocr.device}")'
+    )
+    if (warning := unused_gpu_warning(detector, settings.ocr)) is not None:
+        print(f"ATTENTION : {warning}")
 
     image = Image.open(CHECK_IMAGE)
     run_pipeline(image, detector, settings.ocr, settings.grouping)  # préchauffage

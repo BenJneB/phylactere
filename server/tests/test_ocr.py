@@ -12,6 +12,7 @@ from phylactere.ocr import (
     keep_line,
     run_pipeline,
     slice_ranges,
+    unused_gpu_warning,
 )
 from tests.helpers import GROUPING, FakeDetector, line
 
@@ -176,3 +177,20 @@ def test_recognition_model_must_be_korean():
 def test_overlap_must_be_smaller_than_slice():
     with pytest.raises(ValueError, match="slice_overlap"):
         OCR.model_validate({**OCR.model_dump(), "slice_overlap": 1200})
+
+
+def test_warns_when_gpu_is_available_but_unused():
+    class CpuWithGpu(FakeDetector):
+        gpu_available = True
+
+    warning = unused_gpu_warning(CpuWithGpu(), OCR)
+    assert warning is not None and 'device = "cpu"' in warning
+
+
+def test_no_gpu_warning_without_gpu_or_on_gpu():
+    class Gpu(FakeDetector):
+        device = "gpu"
+        gpu_available = True
+
+    assert unused_gpu_warning(FakeDetector(), OCR) is None
+    assert unused_gpu_warning(Gpu(), OCR) is None
