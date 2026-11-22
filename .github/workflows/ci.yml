@@ -13,6 +13,8 @@ jobs:
   server:
     name: Serveur (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Garde-fou : un job bloqué est arrêté au lieu d'attendre 6 h (limite par défaut de GitHub).
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -60,8 +62,12 @@ jobs:
         working-directory: .
         env:
           PHYLACTERE_CONFIG_DIR: ${{ runner.temp }}/phylactere
+        # Le serveur doit être arrêté à la fin de l'étape : sinon « uv run » garde son verrou
+        # sur le cache et le nettoyage de setup-uv (uv cache prune) attend 5 min puis échoue.
         run: |
           scripts/start.sh --port 8765 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null || true' EXIT
           curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8765/health
 
       - name: Fumée via start.ps1
@@ -70,10 +76,16 @@ jobs:
         working-directory: .
         env:
           PHYLACTERE_CONFIG_DIR: ${{ runner.temp }}\phylactere
+        # Même raison que pour start.sh : on arrête tout l'arbre (powershell → uv → python).
         run: |
-          Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts\start.ps1', '--port', '8765'
-          for ($i = 0; $i -lt 30; $i++) {
-            try { Invoke-RestMethod http://127.0.0.1:8765/health | ConvertTo-Json; exit 0 } catch { Start-Sleep -Seconds 1 }
+          $server = Start-Process powershell -PassThru -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts\start.ps1', '--port', '8765'
+          $ok = $false
+          try {
+            for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
+              try { Invoke-RestMethod http://127.0.0.1:8765/health | ConvertTo-Json; $ok = $true } catch { Start-Sleep -Seconds 1 }
+            }
           }
-          Write-Host 'Le serveur ne répond pas sur /health.'
-          exit 1
+          finally {
+            & taskkill /PID $server.Id /T /F | Out-Null
+          }
+          if (-not $ok) { Write-Host 'Le serveur ne répond pas sur /health.'; exit 1 }
