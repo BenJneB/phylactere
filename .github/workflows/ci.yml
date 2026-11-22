@@ -22,8 +22,19 @@ jobs:
     defaults:
       run:
         working-directory: server
+    env:
+      # Modèles PaddleOCR, mis en cache entre deux exécutions (tests @pytest.mark.ocr)
+      PADDLE_PDX_CACHE_HOME: ${{ github.workspace }}/.paddlex-cache
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache des modèles OCR
+        uses: actions/cache@v4
+        with:
+          path: .paddlex-cache
+          # Les noms des modèles sont dans config.example.toml
+          key: paddlex-${{ runner.os }}-${{ hashFiles('server/config.example.toml', 'server/uv.lock') }}
+          restore-keys: paddlex-${{ runner.os }}-
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -38,8 +49,13 @@ jobs:
           uv run --no-sync ruff check .
           uv run --no-sync ruff format --check .
 
-      - name: Tests
+      - name: Tests (OCR réel compris)
         run: uv run --no-sync pytest
+
+      - name: Vérification de l'OCR (python -m phylactere --check-ocr)
+        env:
+          PHYLACTERE_CONFIG_DIR: ${{ runner.temp }}/phylactere-check
+        run: uv run --no-sync python -m phylactere --check-ocr
 
       - name: Syntaxe des scripts PowerShell (Windows PowerShell 5.1)
         if: runner.os == 'Windows'
