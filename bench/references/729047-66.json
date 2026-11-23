@@ -1,0 +1,349 @@
+{
+ "episode": "729047-66",
+ "source": "https://comic.naver.com/webtoon/detail?titleId=729047&no=66",
+ "author": "Traduction de référence rédigée par Claude (jalon 4) : fiable sur le sens, incertaine sur l'argot et les noms propres sans le reste de la série.",
+ "bubbles": [
+  {
+   "index": 1,
+   "original": "너무소리치지마 그러다 크리쳐라도 나오면 어떡하려고",
+   "reference": "Ne crie pas si fort ! Et si une créature débarquait ?",
+   "note": ""
+  },
+  {
+   "index": 1,
+   "original": "설마~",
+   "reference": "Quand même pas~",
+   "note": ""
+  },
+  {
+   "index": 1,
+   "original": "ㅎ이이익",
+   "reference": "Hiiiiik !",
+   "note": "Cri de peur manuscrit (OCR : 히이이익)."
+  },
+  {
+   "index": 2,
+   "original": "나..나왔..",
+   "reference": "Elle… elle est sor…",
+   "note": "Phrase coupée sur deux bulles : « 나..나왔..다!! » = « Elle… elle est sortie !! » (une créature)."
+  },
+  {
+   "index": 2,
+   "original": "다!!",
+   "reference": "…tie !!",
+   "note": "Fin de la bulle précédente."
+  },
+  {
+   "index": 3,
+   "original": "뭐.. 뭐야?",
+   "reference": "Qu… quoi ?",
+   "note": ""
+  },
+  {
+   "index": 4,
+   "original": "꼬랑..지..?",
+   "reference": "Petite… Queue… ?",
+   "note": "꼬랑지 (« petite queue ») : surnom d'un personnage."
+  },
+  {
+   "index": 4,
+   "original": "글주신그림유령선",
+   "reference": "Scénario : Jusin – Dessin : Yuryeongseon",
+   "note": "Crédits de l'épisode (noms des auteurs)."
+  },
+  {
+   "index": 4,
+   "original": "스네이크홀",
+   "reference": "Snake Hole",
+   "note": "Titre du chapitre, en anglais translittéré."
+  },
+  {
+   "index": 5,
+   "original": "꼬랑지!!",
+   "reference": "Petite Queue !!",
+   "note": ""
+  },
+  {
+   "index": 6,
+   "original": "어이 꼬랑지! 데리러왔어~",
+   "reference": "Hé, Petite Queue ! Je suis venu te chercher~",
+   "note": ""
+  },
+  {
+   "index": 6,
+   "original": "통-",
+   "reference": "Poc–",
+   "note": "Bruit du disque lancé qui rebondit."
+  },
+  {
+   "index": 7,
+   "original": "왜그렇게 쭈구리 같이 하고 있어?",
+   "reference": "Pourquoi tu restes recroquevillé comme ça ?",
+   "note": ""
+  },
+  {
+   "index": 7,
+   "original": "그건내…",
+   "reference": "C'est mon…",
+   "note": "Phrase interrompue."
+  },
+  {
+   "index": 7,
+   "original": "깜짝이야!",
+   "reference": "Tu m'as fait peur !",
+   "note": ""
+  },
+  {
+   "index": 7,
+   "original": "슈우우",
+   "reference": "Fshhhh…",
+   "note": "Bruit de la lumière qui grésille."
+  },
+  {
+   "index": 8,
+   "original": "크리쳐인가..?",
+   "reference": "Une créature… ?",
+   "note": ""
+  },
+  {
+   "index": 8,
+   "original": "가만히 냅뒀으면 재웅님이 해치워줬을 텐데~",
+   "reference": "Si tu l'avais laissée tranquille, Jae-woong s'en serait occupé~",
+   "note": "재웅 = Jae-woong (nom, avec honorifique 님)."
+  },
+  {
+   "index": 9,
+   "original": "괜한수고를..",
+   "reference": "Tout ce mal pour rien…",
+   "note": ""
+  },
+  {
+   "index": 9,
+   "original": "떨고 있어.. 무슨 일이 있었던 거지.?",
+   "reference": "Il tremble… Qu'est-ce qui lui est arrivé… ?",
+   "note": ""
+  },
+  {
+   "index": 10,
+   "original": "그러고 보니저번에도 비슷한..",
+   "reference": "Maintenant que j'y pense, la dernière fois aussi, c'était pareil…",
+   "note": ""
+  },
+  {
+   "index": 13,
+   "original": "꿀꺾",
+   "reference": "Gloups",
+   "note": "Bruit de déglutition (꿀꺽)."
+  },
+  {
+   "index": 13,
+   "original": "어이꼬랑지 구하러왔어~",
+   "reference": "Hé, Petite Queue, je suis venu te sauver~",
+   "note": "Bulle coupée entre les images 13 et 14."
+  },
+  {
+   "index": 14,
+   "original": "이제돌아가자~",
+   "reference": "Allez, on rentre~",
+   "note": ""
+  },
+  {
+   "index": 14,
+   "original": "턱",
+   "reference": "Tap",
+   "note": "Main posée sur l'épaule."
+  },
+  {
+   "index": 15,
+   "original": "닥",
+   "reference": "Paf !",
+   "note": "OCR : 탁 (la main est repoussée)."
+  },
+  {
+   "index": 16,
+   "original": "쿠",
+   "reference": "Boum",
+   "note": "OCR : 쿵 (chute lourde)."
+  },
+  {
+   "index": 16,
+   "original": "내몸에 손대지 마!",
+   "reference": "Ne me touche pas !",
+   "note": ""
+  },
+  {
+   "index": 17,
+   "original": "아",
+   "reference": "Haa…",
+   "note": "OCR : 하아 (halètement)."
+  },
+  {
+   "index": 18,
+   "original": "꼬랑..",
+   "reference": "Petite… Queue…",
+   "note": ""
+  },
+  {
+   "index": 20,
+   "original": "두",
+   "reference": "Ratatata",
+   "note": "Fragment de 두두두두 (rafale de tirs)."
+  },
+  {
+   "index": 21,
+   "original": "조준사격이라~",
+   "reference": "Un tir ciblé, hein~",
+   "note": "조준사격 : nom d'une compétence (« tir ciblé »)."
+  },
+  {
+   "index": 21,
+   "original": "무",
+   "reference": "Ratatata",
+   "note": "Fragment de 두두두두 (rafale de tirs), mal lu."
+  },
+  {
+   "index": 21,
+   "original": "저총알들이 모두이표식을향해 날아온다 이거지?",
+   "reference": "Toutes ces balles vont foncer droit sur cette marque, c'est ça ?",
+   "note": ""
+  },
+  {
+   "index": 23,
+   "original": "오랜만에 두근거리는데~?",
+   "reference": "Ça faisait longtemps que mon cœur n'avait pas battu comme ça~ ?",
+   "note": "Excitation avant le combat."
+  },
+  {
+   "index": 23,
+   "original": "주록-",
+   "reference": "Ploc–",
+   "note": "OCR : 주륵 (une goutte qui coule)."
+  },
+  {
+   "index": 25,
+   "original": "나아아아아",
+   "reference": "Aaaaaah !",
+   "note": "Cri ; la première syllabe est mal lue."
+  },
+  {
+   "index": 26,
+   "original": "빠르다.!",
+   "reference": "Rapide… !",
+   "note": ""
+  },
+  {
+   "index": 26,
+   "original": "두",
+   "reference": "Ratatata",
+   "note": "Fragment de 두두두두 (rafale de tirs)."
+  },
+  {
+   "index": 26,
+   "original": "하지만 조준사격은 사격을 멈추지 않는 한",
+   "reference": "Mais tant que je ne cesse pas le feu, le tir ciblé…",
+   "note": "Phrase continuée dans la bulle suivante."
+  },
+  {
+   "index": 27,
+   "original": "목표물에 닿을 때까지 절대 멈추지 않아.",
+   "reference": "…ne s'arrête jamais avant d'avoir touché sa cible.",
+   "note": ""
+  },
+  {
+   "index": 28,
+   "original": "조준사격은 계속해서 목표물을 향해 최단 거리로 도달하는 것이 아니라",
+   "reference": "Le tir ciblé ne file pas vers sa cible par le chemin le plus court…",
+   "note": ""
+  },
+  {
+   "index": 28,
+   "original": "먼저 날아간 미사일의 동선을 따라 움직이나 보군",
+   "reference": "…il suit la trajectoire du premier projectile, on dirait.",
+   "note": ""
+  },
+  {
+   "index": 29,
+   "original": "좌아아아아",
+   "reference": "Fwoooosh",
+   "note": "Glissade rapide sur la glace."
+  },
+  {
+   "index": 29,
+   "original": "마치 뱀 처럼~",
+   "reference": "Comme un serpent~",
+   "note": ""
+  },
+  {
+   "index": 29,
+   "original": "얼음 감옥!",
+   "reference": "Prison de glace !",
+   "note": "Nom d'une attaque."
+  },
+  {
+   "index": 34,
+   "original": "감옥치고는 너무 쉽게 뚫리는데?",
+   "reference": "Pour une prison, elle cède un peu trop facilement, non ?",
+   "note": ""
+  },
+  {
+   "index": 34,
+   "original": "능력과 아이템의 밸런스는 좋아.",
+   "reference": "L'équilibre entre ton pouvoir et ton objet est bon.",
+   "note": ""
+  },
+  {
+   "index": 35,
+   "original": "네평가는 그정도야.",
+   "reference": "Voilà ce que je pense de toi.",
+   "note": "Littéralement « ton évaluation, c'est ça »."
+  },
+  {
+   "index": 35,
+   "original": "크윽-",
+   "reference": "Nngh–",
+   "note": "Grognement de douleur."
+  },
+  {
+   "index": 36,
+   "original": "이",
+   "reference": "Aaah",
+   "note": "Fragment d'un cri, mal lu."
+  },
+  {
+   "index": 36,
+   "original": "고유능력과 고유 아이템은 자체적으로 경험치가 쌓인다.",
+   "reference": "Les pouvoirs et objets uniques accumulent leur propre expérience.",
+   "note": ""
+  },
+  {
+   "index": 36,
+   "original": "많이 사용할수록 점점 강해지지.",
+   "reference": "Plus on s'en sert, plus ils deviennent puissants.",
+   "note": ""
+  },
+  {
+   "index": 37,
+   "original": "조금전에도말했듯이 년아직",
+   "reference": "Comme je te l'ai dit tout à l'heure, il te manque encore…",
+   "note": "OCR : 넌 (« toi ») lu 년. Phrase continuée dans la bulle suivante."
+  },
+  {
+   "index": 37,
+   "original": "스으-",
+   "reference": "Fsss–",
+   "note": "Glissement."
+  },
+  {
+   "index": 38,
+   "original": "경험이 부족해.",
+   "reference": "…de l'expérience.",
+   "note": ""
+  },
+  {
+   "index": 39,
+   "original": "뭐 그래도 1층 큐버치곤 나쁘지 않았어",
+   "reference": "Enfin, pour un cuber du premier étage, ce n'était pas mal.",
+   "note": "큐버 (« cuber ») : les joueurs de la série Counter Cube."
+  }
+ ]
+}
