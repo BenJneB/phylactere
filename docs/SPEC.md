@@ -89,11 +89,12 @@ Le modèle OCR se charge en arrière-plan au démarrage : `ocr` vaut `loading` p
   "episode_id": "12",
   "index": 7,
   "priority": "visible",
+  "model": "qwen3.5:4b",
   "prev_image_url": "https://image-comic.pstatic.net/…",
   "next_image_url": "https://image-comic.pstatic.net/…"
 }
 ```
-`target_lang` est facultatif (défaut : la configuration). `prev_image_url` et `next_image_url` (facultatifs) désignent les images voisines dans l'épisode : Naver découpe les épisodes en bandes de 1600 px et une bulle, voire une ligne, peut être coupée entre deux images (cas réel : épisode 729047/66, images 14-15). Le serveur lit l'image prolongée par `neighbor_margin` px de chaque voisine de même largeur ; une bulle appartient à l'image qui contient son haut, et sa boîte peut déborder en bas sur l'image suivante (qui l'ignore). Une voisine illisible est ignorée.
+`target_lang` et `model` (modèle Ollama choisi dans le popup) sont facultatifs (défaut : la configuration). `prev_image_url` et `next_image_url` (facultatifs) désignent les images voisines dans l'épisode : Naver découpe les épisodes en bandes de 1600 px et une bulle, voire une ligne, peut être coupée entre deux images (cas réel : épisode 729047/66, images 14-15). Le serveur lit l'image prolongée par `neighbor_margin` px de chaque voisine de même largeur ; une bulle appartient à l'image qui contient son haut, et sa boîte peut déborder en bas sur l'image suivante (qui l'ignore). Une voisine illisible est ignorée.
 Réponse :
 ```json
 {
@@ -181,6 +182,12 @@ Point de départ : l'extension v1 existante (OCR Google Vision + Google Translat
 - Le badge affiche « Serveur arrêté » quand `/health` ne répond pas, avec un nouvel essai toutes les 5 s.
 - Popup : URL du serveur (défaut `http://127.0.0.1:8765`), jeton, langue cible, modèle (liste depuis `/models`), pastille d'état du serveur, bouton vider le cache.
 - Compatibilité Firefox : conserver `background.scripts` + `service_worker`, et `browser_specific_settings`.
+
+Réalisation (jalon 5) :
+- Les images de l'épisode sont reconnues à leur URL (`image-comic.pstatic.net/…/<titleId>/<no>/`) dans le conteneur `#sectionContWide`, la vignette de l'épisode (même dossier, `thumbnail_…`) étant exclue. Toutes sont envoyées dès l'ouverture, sans attendre leur chargement : les images visibles d'abord (`visible`), puis le reste de l'épisode à partir de la position de lecture (`prefetch`). `index`, `prev_image_url` et `next_image_url` suivent l'ordre du DOM.
+- Au plus 3 requêtes en cours : le navigateur n'ouvre que 6 connexions par serveur, et une image devenue visible resterait sinon bloquée dans le navigateur derrière le préchargement, sans atteindre la file à priorité du serveur. Une image déjà envoyée en `prefetch` qui devient visible est renvoyée en `visible` (hors quota) : le serveur fusionne les deux requêtes.
+- Serveur injoignable, jeton refusé (401) ou service indisponible (503) suspendent toute la file : badge « Serveur arrêté » et nouvel essai via `/health` toutes les 5 s, « Jeton à saisir » jusqu'au changement du jeton dans le popup, ou nouvel essai après `Retry-After`. Les autres erreurs (400, 502, 504) ne concernent que leur image.
+- Le popup vérifie les permissions d'hôte (`chrome.permissions.contains`) et propose de les accorder : Firefox ne les donne pas toujours à l'installation d'une extension MV3.
 
 ## 7. Développement sur Ubuntu, utilisation sur Windows
 

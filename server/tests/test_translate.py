@@ -125,6 +125,12 @@ def test_model_without_think_option():
     assert "think" in fake.bodies[0] and "think" not in fake.bodies[1]
 
 
+def test_model_override():
+    fake = FakeOllama({1: "Salut"})
+    assert translate(fake, ["안녕"], model="gemma3:4b") == ["Salut"]
+    assert fake.bodies[0]["model"] == "gemma3:4b"
+
+
 def test_ollama_down():
     def down(request):
         raise httpx.ConnectError("refusé", request=request)
