@@ -11,6 +11,7 @@ from phylactere.ocr import (
     dedup_lines,
     keep_line,
     run_pipeline,
+    run_pipeline_with_neighbors,
     slice_ranges,
     unused_gpu_warning,
 )
@@ -25,6 +26,7 @@ OCR = OcrConfig(
     slice_overlap=120,
     dedup_overlap=0.5,
     edge_margin=8,
+    neighbor_margin=400,
 )
 
 
@@ -194,3 +196,72 @@ def test_no_gpu_warning_without_gpu_or_on_gpu():
 
     assert unused_gpu_warning(FakeDetector(), OCR) is None
     assert unused_gpu_warning(Gpu(), OCR) is None
+
+
+# --- OCR prolongé par les images voisines ---
+
+
+class SeamDetector(FakeDetector):
+    """Renvoie une ligne placée en coordonnées de l'image prolongée."""
+
+    def __init__(self, lines):
+        super().__init__([lines])
+
+
+def neighbors_ocr(lines, previous=True, following=True, width=690):
+    image = Image.new("RGB", (690, 1600), "white")
+    prev_img = Image.new("RGB", (width, 1600), "white") if previous else None
+    next_img = Image.new("RGB", (width, 1600), "white") if following else None
+    cfg = OCR.model_copy(update={"slice_height": 5000})  # une seule tranche, plus lisible
+    detector = SeamDetector(lines)
+    result = run_pipeline_with_neighbors(image, prev_img, next_img, detector, cfg, GROUPING)
+    return result, detector
+
+
+def test_neighbors_extend_the_image():
+    result, detector = neighbors_ocr([])
+    assert detector.shapes == [(400 + 1600 + 400, 690)]
+    assert result.image_size.model_dump() == {"w": 690, "h": 1600}
+
+
+def test_bubble_crossing_the_bottom_seam_belongs_to_this_image():
+    # Image prolongée : 400 px de la précédente, puis l'image (400 → 2000), puis la suivante.
+    result, _ = neighbors_ocr(
+        [line(200, 1975, 150, text="어이 꼬랑지"), line(190, 2010, 170, text="구하러 왔어")]
+    )
+    assert [(b.text, b.box.y, b.box.bottom) for b in result.bubbles] == [
+        ("어이 꼬랑지 구하러 왔어", 1575, 1640)
+    ]
+
+
+def test_bubble_starting_in_previous_image_is_left_to_it():
+    result, _ = neighbors_ocr(
+        [
+            line(200, 380, 150, text="이전"),
+            line(200, 415, 150, text="이어짐"),
+            line(200, 900, 100, text="여기"),
+        ]
+    )
+    assert [(b.text, b.box.y) for b in result.bubbles] == [("여기", 500)]
+
+
+def test_bubble_in_next_image_is_left_to_it():
+    result, _ = neighbors_ocr([line(200, 2100, 150, text="다음")])
+    assert result.bubbles == []
+
+
+def test_neighbor_with_another_width_is_ignored():
+    result, detector = neighbors_ocr([], previous=True, following=True, width=202)
+    assert detector.shapes == [(1600, 690)]
+
+
+def test_no_neighbors_is_plain_ocr():
+    result, detector = neighbors_ocr([line(100, 100, 200)], previous=False, following=False)
+    assert detector.shapes == [(1600, 690)]
+    assert result.bubbles[0].box.y == 100
+
+
+def test_only_next_neighbor():
+    result, detector = neighbors_ocr([line(100, 1590, 200, h=30, text="잘림")], previous=False)
+    assert detector.shapes == [(2000, 690)]
+    assert [(b.text, b.box.y, b.edges) for b in result.bubbles] == [("잘림", 1590, [])]

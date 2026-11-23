@@ -18,11 +18,20 @@ log_level = "info"
 [ollama]
 url = "http://127.0.0.1:11434"
 # Provisoire : le modèle par défaut sera choisi au jalon 4, sur mesures.
-model = "qwen3:8b"
+# Il doit être installé : ollama pull <modèle>
+model = "qwen3:4b"
+# Durée pendant laquelle Ollama garde le modèle en mémoire après une requête
+keep_alive = "30m"
+# Délai maximal d'une requête (le premier chargement du modèle peut être long)
+timeout_s = 180
 
 [translation]
-# Langue cible par défaut (code ISO 639-1)
+# Langue cible par défaut (code ISO 639-1, ex. "fr", "en")
 target_lang = "fr"
+# Nombre de bulles déjà traduites de l'épisode données au modèle comme contexte
+context_size = 15
+# 0 = déterministe ; un peu de variété rend le texte plus naturel
+temperature = 0.2
 
 [ocr]
 # "auto" (GPU si PaddlePaddle GPU est installé et qu'une carte NVIDIA répond, sinon CPU),
@@ -42,6 +51,9 @@ dedup_overlap = 0.5
 # Une bulle à moins de cette distance (px) du bord haut ou bas est signalée
 # comme possiblement coupée entre deux images
 edge_margin = 8
+# Hauteur (px) prise sur les images voisines, pour lire en entier les bulles
+# coupées entre deux images
+neighbor_margin = 400
 
 [grouping]
 # Écart vertical maximal entre deux lignes d'une même bulle, en hauteurs de ligne médianes
@@ -50,6 +62,11 @@ max_vertical_gap = 0.8
 min_horizontal_overlap = 0.3
 # ...ou écart maximal entre les centres, en fraction de la ligne la plus étroite
 max_center_offset = 0.6
+
+[cache]
+# Fichier SQLite du cache ; vide = dossier de cache de l'utilisateur
+# (Windows : %LOCALAPPDATA%\phylactere\Cache\cache.sqlite3)
+path = ""
 
 [fetch]
 # Seuls ces hôtes sont autorisés (HTTPS uniquement)

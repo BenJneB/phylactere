@@ -9,7 +9,7 @@ Traduction en temps réel des webtoons de comic.naver.com (coréen → français
 Prérequis :
 
 - [git](https://git-scm.com/download/win) ;
-- [Ollama](https://ollama.com/download/windows) : télécharger et lancer `OllamaSetup.exe`. Ollama démarre ensuite tout seul à l'ouverture de session et n'écoute qu'en local (`127.0.0.1:11434`) ; ne pas définir `OLLAMA_HOST=0.0.0.0`, qui l'exposerait sur le réseau. Vérification : `Invoke-RestMethod http://127.0.0.1:11434/api/tags`.
+- [Ollama](https://ollama.com/download/windows) : télécharger et lancer `OllamaSetup.exe`, puis télécharger le modèle de traduction (provisoire, environ 2,5 Go) : `ollama pull qwen3:4b`. Ollama démarre ensuite tout seul à l'ouverture de session et n'écoute qu'en local (`127.0.0.1:11434`) ; ne pas définir `OLLAMA_HOST=0.0.0.0`, qui l'exposerait sur le réseau. Vérification : `Invoke-RestMethod http://127.0.0.1:11434/api/tags`.
 
 ```powershell
 git clone <url-du-dépôt> phylactere

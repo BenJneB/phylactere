@@ -21,7 +21,7 @@ from PIL import Image
 
 from phylactere.config import GroupingConfig, OcrConfig, cache_dir, user_config_path
 from phylactere.grouping import group_lines, mark_edges
-from phylactere.schemas import Box, ImageSize, Line, OcrResult
+from phylactere.schemas import Box, Bubble, ImageSize, Line, OcrResult
 
 logger = logging.getLogger("phylactere.ocr")
 
@@ -92,6 +92,67 @@ def run_pipeline(
 
     lines = dedup_lines(lines, ocr_cfg.dedup_overlap)
     bubbles = mark_edges(group_lines(lines, grouping_cfg), height, ocr_cfg.edge_margin)
+    return OcrResult(image_size=ImageSize(w=width, h=height), bubbles=bubbles)
+
+
+def _shift_bubble(bubble: Bubble, dy: int) -> Bubble:
+    return bubble.model_copy(
+        update={
+            "box": bubble.box.shifted(dy),
+            "lines": [
+                line.model_copy(update={"box": line.box.shifted(dy)}) for line in bubble.lines
+            ],
+        }
+    )
+
+
+def run_pipeline_with_neighbors(
+    image: Image.Image,
+    previous: Image.Image | None,
+    following: Image.Image | None,
+    detector: LineDetector,
+    ocr_cfg: OcrConfig,
+    grouping_cfg: GroupingConfig,
+) -> OcrResult:
+    """OCR d'une image prolongée par le bas de la précédente et le haut de la suivante.
+
+    Naver découpe les épisodes en bandes : une bulle (voire une ligne) peut être coupée
+    entre deux images. On lit donc l'image avec ``neighbor_margin`` px de chaque voisine
+    (de même largeur), et une bulle appartient à l'image qui contient son haut : elle
+    peut déborder en bas sur la suivante, et la suivante l'ignore. Coordonnées relatives
+    à l'image.
+    """
+    width, height = image.size
+    margin = ocr_cfg.neighbor_margin
+
+    def usable(neighbor: Image.Image | None) -> bool:
+        return neighbor is not None and margin > 0 and neighbor.width == width
+
+    above = (
+        previous.crop((0, max(0, previous.height - margin), width, previous.height))
+        if usable(previous)
+        else None
+    )
+    below = (
+        following.crop((0, 0, width, min(margin, following.height))) if usable(following) else None
+    )
+    if above is None and below is None:
+        return run_pipeline(image, detector, ocr_cfg, grouping_cfg)
+
+    offset = above.height if above else 0
+    extended = Image.new("RGB", (width, offset + height + (below.height if below else 0)))
+    if above:
+        extended.paste(above, (0, 0))
+    extended.paste(image.convert("RGB"), (0, offset))
+    if below:
+        extended.paste(below, (0, offset + height))
+
+    result = run_pipeline(extended, detector, ocr_cfg, grouping_cfg)
+    bubbles = [
+        _shift_bubble(bubble, -offset)
+        for bubble in result.bubbles
+        if offset <= bubble.box.y < offset + height
+    ]
     return OcrResult(image_size=ImageSize(w=width, h=height), bubbles=bubbles)
 
 
@@ -203,7 +264,13 @@ class OcrEngine:
             self.status = "error"
             logger.exception("Échec du chargement de PaddleOCR")
 
-    async def recognize(self, image: Image.Image) -> OcrResult:
+    async def recognize(
+        self,
+        image: Image.Image,
+        previous: Image.Image | None = None,
+        following: Image.Image | None = None,
+    ) -> OcrResult:
+        """OCR d'une image, prolongée par ses voisines si elles sont fournies."""
         if self.status == "loading":
             raise OcrUnavailable("OCR en cours de chargement, réessaie dans quelques secondes.")
         if self.status == "error" or self._detector is None:
@@ -211,8 +278,10 @@ class OcrEngine:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor,
-            run_pipeline,
+            run_pipeline_with_neighbors,
             image,
+            previous,
+            following,
             self._detector,
             self._ocr_cfg,
             self._grouping_cfg,
