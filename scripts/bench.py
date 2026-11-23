@@ -146,15 +146,18 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
         cfg = settings.translation.model_copy(
             update={"context_mode": context_mode, "examples": examples}
         )
-        translator = OllamaTranslator(client, ollama_cfg, cfg)
+        calls: list[dict] = []  # statistiques Ollama de chaque requête de l'image en cours
+        translator = OllamaTranslator(client, ollama_cfg, cfg, on_stats=calls.append)
         context: list[tuple[str, str]] = []
         translations, times, errors, translated_indexes = [], [], [], []
+        per_image: dict[str, dict] = {}
         for index, result in enumerate(ocr_results):
             texts = [bubble.text for bubble in result.bubbles]
             if not texts:
                 translations.append([])
                 continue
             window = context[-cfg.context_size :] if use_context and cfg.context_size else []
+            calls.clear()
             start = time.perf_counter()
             try:
                 out = await translator.translate(texts, lang, window)
@@ -162,6 +165,13 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
                 errors.append({"index": index, "error": str(exc)})
                 out = [""] * len(texts)
             times.append((time.perf_counter() - start) * 1000)
+            per_image[str(index)] = {
+                "ms": round(times[-1]),
+                "bubbles": len(texts),
+                # Plus d'une requête : réponse invalide ou incomplète, nouvelle tentative.
+                "requests": len(calls),
+                **{key: round(sum(c[key] for c in calls)) for key in STAT_KEYS},
+            }
             translated_indexes.append(index)
             translations.append(out)
             context.extend(zip(texts, out, strict=True))
@@ -177,18 +187,48 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
                 str(i): round(ms) for i, ms in zip(translated_indexes, times, strict=True)
             },
             "per_bubble_ms": round(sum(times) / bubbles) if bubbles else None,
+            # Vitesse propre de la carte, indépendante de la longueur des réponses.
+            "tokens": token_summary(per_image),
+            "per_image": per_image,
             "errors": errors,
             "translations": translations,
         }
         runs.append(run)
-        ms = run["translate_ms"]
+        ms, tok = run["translate_ms"], run["tokens"]
         print(
-            f"    {variant:<14} {ms['mean']} ms/image (max {ms['max']}), {len(errors)} erreur(s)",
+            f"    {variant:<14} {ms['mean']} ms/image (max {ms['max']}), {len(errors)} erreur(s)"
+            f" | génération {tok['generation_tps']} jetons/s, lecture {tok['prompt_tps']} jetons/s,"
+            f" {tok['tokens_per_bubble']} jetons/bulle, {tok['extra_requests']} requête(s) en plus",
             flush=True,
         )
 
     await unload(client, model)  # libère la mémoire vidéo avant le modèle suivant
     return runs
+
+
+STAT_KEYS = ("eval_count", "eval_ms", "prompt_eval_count", "prompt_eval_ms")
+
+
+def token_summary(per_image: dict[str, dict]) -> dict:
+    """Débits en jetons par seconde : séparent « carte lente » de « réponses longues ».
+
+    generation_tps : vitesse d'écriture de la réponse ; prompt_tps : vitesse de lecture du
+    prompt ; tokens_per_bubble : longueur des réponses ; extra_requests : nouvelles
+    tentatives (réponse invalide ou incomplète).
+    """
+    total = {key: sum(image[key] for image in per_image.values()) for key in STAT_KEYS}
+    bubbles = sum(image["bubbles"] for image in per_image.values())
+    requests = sum(image["requests"] for image in per_image.values())
+
+    def rate(count: str, duration: str) -> float | None:
+        return round(total[count] / total[duration] * 1000, 1) if total[duration] else None
+
+    return {
+        "generation_tps": rate("eval_count", "eval_ms"),
+        "prompt_tps": rate("prompt_eval_count", "prompt_eval_ms"),
+        "tokens_per_bubble": round(total["eval_count"] / bubbles, 1) if bubbles else None,
+        "extra_requests": requests - len(per_image),
+    }
 
 
 def load_reference(path: Path | None) -> dict:
@@ -235,15 +275,17 @@ def render_report(meta: dict, images, ocr_results, runs, reference) -> str:
         if run.get("skipped"):
             speed_rows.append(
                 f"<tr><td>{esc(run['model'])}</td><td>{esc(run['variant'])}</td>"
-                "<td colspan=6>non chargé (modèle absent d'Ollama ?)</td></tr>"
+                "<td colspan=10>non chargé (modèle absent d'Ollama ?)</td></tr>"
             )
             continue
         gpu = f"{run['gpu_ratio']:.0%}" if run["gpu_ratio"] is not None else "?"
-        ms = run["translate_ms"]
+        ms, tok = run["translate_ms"], run["tokens"]
         speed_rows.append(
             f"<tr><td>{esc(run['model'])}</td><td>{esc(run['variant'])}</td>"
             f"<td>{run['load_s']}</td><td>{gpu}</td><td>{ms['mean']}</td><td>{ms['max']}</td>"
-            f"<td>{run['per_bubble_ms']}</td><td>{len(run['errors'])}</td></tr>"
+            f"<td>{run['per_bubble_ms']}</td><td>{tok['generation_tps']}</td>"
+            f"<td>{tok['prompt_tps']}</td><td>{tok['tokens_per_bubble']}</td>"
+            f"<td>{tok['extra_requests']}</td><td>{len(run['errors'])}</td></tr>"
         )
 
     cards = []
@@ -305,8 +347,14 @@ body.reveal .who {{ display: inline; }}
 <ul>{meta_html}</ul>
 <h2>Vitesse</h2>
 <table><tr><th>Modèle</th><th>Variante</th><th>Chargement (s)</th><th>Part GPU</th>
-<th>Traduction moy. (ms/image)</th><th>max</th><th>ms/bulle</th><th>Erreurs</th></tr>
+<th>Traduction moy. (ms/image)</th><th>max</th><th>ms/bulle</th>
+<th>Génération (jetons/s)</th><th>Lecture du prompt (jetons/s)</th><th>Jetons/bulle</th>
+<th>Requêtes en plus</th><th>Erreurs</th></tr>
 {"".join(speed_rows)}</table>
+<p>Les débits en jetons par seconde mesurent la vitesse propre de la carte : s'ils baissent
+d'une série à l'autre, la carte était bridée (mode d'alimentation, chauffe) ; si ce sont les
+jetons par bulle qui montent, les réponses étaient plus longues. « Requêtes en plus » compte
+les nouvelles tentatives après une réponse invalide ou incomplète.</p>
 <h2>Qualité (relecture)</h2>
 <p>Pour chaque bulle : cochez <b>correcte</b> pour chaque traduction juste et naturelle (même
 sens que la référence, français fluide), et choisissez la <b>meilleure</b>. Les traductions

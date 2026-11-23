@@ -236,3 +236,53 @@ def test_prompt_id_changes_with_variants():
     base = prompt_id(SETTINGS.translation)
     assert base != prompt_id(SETTINGS.translation.model_copy(update={"examples": True}))
     assert base != prompt_id(SETTINGS.translation.model_copy(update={"context_mode": "original"}))
+
+
+def test_stats_callback_receives_ollama_counters():
+    seen = []
+
+    def handler(request):
+        content = json.dumps({"translations": [{"id": 1, "original": "안녕", "text": "Salut"}]})
+        return httpx.Response(
+            200,
+            json={
+                "message": {"content": content},
+                "eval_count": 30,
+                "eval_duration": 600_000_000,
+                "prompt_eval_count": 400,
+                "prompt_eval_duration": 200_000_000,
+                "total_duration": 900_000_000,
+            },
+        )
+
+    async def go():
+        async with httpx.AsyncClient(
+            base_url="http://o", transport=httpx.MockTransport(handler)
+        ) as c:
+            translator = OllamaTranslator(
+                c, SETTINGS.ollama, SETTINGS.translation, on_stats=seen.append
+            )
+            return await translator.translate(["안녕"], "fr")
+
+    assert asyncio.run(go()) == ["Salut"]
+    assert seen == [
+        {
+            "eval_count": 30,
+            "eval_ms": 600.0,
+            "prompt_eval_count": 400,
+            "prompt_eval_ms": 200.0,
+            "total_ms": 900.0,
+        }
+    ]
+
+
+def test_stats_are_optional_and_tolerate_missing_counters():
+    from phylactere.translate import ollama_stats
+
+    assert ollama_stats({}) == {
+        "eval_count": 0,
+        "eval_ms": 0.0,
+        "prompt_eval_count": 0,
+        "prompt_eval_ms": 0.0,
+        "total_ms": 0.0,
+    }

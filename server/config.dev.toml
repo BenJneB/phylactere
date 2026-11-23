@@ -7,9 +7,8 @@
 log_level = "debug"
 
 [ollama]
-# Le plus petit modèle qui traduise correctement : qwen3:1.7b romanise le coréen au lieu
-# de le traduire. Environ 18 s par image sur CPU. Installation : ollama pull qwen3:4b
-model = "qwen3:4b"
+# Même modèle que le défaut (choisi au jalon 4). qwen3:1.7b ne traduit pas : il romanise
+# le coréen. Installation : ollama pull qwen3.5:4b
 
 [ocr]
 device = "cpu"
