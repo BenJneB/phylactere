@@ -148,7 +148,7 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
         )
         translator = OllamaTranslator(client, ollama_cfg, cfg)
         context: list[tuple[str, str]] = []
-        translations, times, errors = [], [], []
+        translations, times, errors, translated_indexes = [], [], [], []
         for index, result in enumerate(ocr_results):
             texts = [bubble.text for bubble in result.bubbles]
             if not texts:
@@ -162,6 +162,7 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
                 errors.append({"index": index, "error": str(exc)})
                 out = [""] * len(texts)
             times.append((time.perf_counter() - start) * 1000)
+            translated_indexes.append(index)
             translations.append(out)
             context.extend(zip(texts, out, strict=True))
         bubbles = sum(len(r.bubbles) for r in ocr_results)
@@ -171,6 +172,10 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
             "load_s": load_s,
             "gpu_ratio": gpu,
             "translate_ms": stats(times),
+            # Temps de chaque image traduite (images sans bulle exclues) : repère les pics.
+            "times_ms": {
+                str(i): round(ms) for i, ms in zip(translated_indexes, times, strict=True)
+            },
             "per_bubble_ms": round(sum(times) / bubbles) if bubbles else None,
             "errors": errors,
             "translations": translations,
