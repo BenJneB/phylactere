@@ -17,10 +17,11 @@ log_level = "info"
 
 [ollama]
 url = "http://127.0.0.1:11434"
-# Choisi au jalon 4 sur mesures (voir README, « Modèle de traduction »).
-# Alternative pour une carte de 12 Go ou plus : "qwen3.5:9b" (un peu meilleur, plus lent).
+# Choisi au jalon 5 en lecture réelle (voir README, « Modèle de traduction »).
+# Si la traduction est lente (carte de moins de 8 Go, mémoire vidéo saturée) :
+# "qwen3.5:4b", plus rapide mais moins bon. Le popup de l'extension permet aussi d'en changer.
 # Le modèle doit être installé : ollama pull <modèle>
-model = "qwen3.5:4b"
+model = "qwen3.5:9b"
 # Durée pendant laquelle Ollama garde le modèle en mémoire après une requête
 keep_alive = "30m"
 # Délai maximal d'une requête (le premier chargement du modèle peut être long)

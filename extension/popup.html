@@ -38,7 +38,7 @@
            font-weight: 600; cursor: pointer; }
   .primary { background: var(--accent); color: #fff; }
   .secondary { background: transparent; color: var(--accent); }
-  #grant { width: 100%; margin-top: 8px; }
+  #grant, .wide { width: 100%; margin-top: 8px; }
   button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #status { min-height: 18px; margin-top: 10px; font-size: 12px; }
   .ok { color: var(--ok); } .err { color: var(--err); }
@@ -88,8 +88,9 @@
 
   <div class="actions">
     <button id="save" class="primary">Enregistrer</button>
-    <button id="clear" class="secondary">Vider le cache</button>
+    <button id="clear" class="secondary">Vider tout le cache</button>
   </div>
+  <button id="clearSeries" class="secondary wide" hidden>Vider le cache de cette série</button>
   <div id="status"></div>
   <div class="hint">Sur la page : Alt+T ou clic sur le badge pour revoir l’original, clic sur une bulle pour la masquer.</div>
 

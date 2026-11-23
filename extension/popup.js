@@ -9,6 +9,18 @@ const LOCAL_URL = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?\/?$/;
 const ORIGINS = ["http://127.0.0.1/*", "http://localhost/*", "https://comic.naver.com/*"];
 
 let savedModel = "";
+let currentSeries = null; // titleId de l'onglet actif, s'il affiche une page Naver
+
+// L'URL de l'onglet est lisible grâce à la permission d'hôte sur comic.naver.com.
+async function activeSeries() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    const url = new URL(tab?.url || "");
+    return url.hostname === "comic.naver.com" ? url.searchParams.get("titleId") : null;
+  } catch {
+    return null;
+  }
+}
 
 async function init() {
   const s = await chrome.storage.local.get(DEFAULTS);
@@ -18,6 +30,8 @@ async function init() {
   $("targetLang").value = s.targetLang;
   savedModel = s.model;
   setModels([], "");
+  currentSeries = await activeSeries();
+  $("clearSeries").hidden = !currentSeries;
   await checkPermissions();
   await refresh();
   setInterval(refreshHealth, 5000);
@@ -103,10 +117,15 @@ $("save").addEventListener("click", async () => {
   refresh();
 });
 
-$("clear").addEventListener("click", async () => {
-  const res = await send({ type: "clear-cache" });
-  if (res?.ok) status(`Cache vidé (${res.data.removed} entrée(s)).`);
-  else status(res?.error ?? "Échec.", "err");
-});
+// Les pages déjà affichées gardent leurs bulles : recharger la page pour retraduire.
+async function clearCache(seriesId) {
+  const res = await send({ type: "clear-cache", seriesId });
+  if (!res?.ok) return status(res?.error ?? "Échec.", "err");
+  const what = seriesId ? `Cache de la série ${seriesId} vidé` : "Cache vidé";
+  status(`${what} (${res.data.removed} entrée(s)). Rechargez la page pour retraduire.`);
+}
+
+$("clear").addEventListener("click", () => clearCache());
+$("clearSeries").addEventListener("click", () => clearCache(currentSeries));
 
 init();

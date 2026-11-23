@@ -7,8 +7,9 @@
 log_level = "debug"
 
 [ollama]
-# Même modèle que le défaut (choisi au jalon 4). qwen3:1.7b ne traduit pas : il romanise
-# le coréen. Installation : ollama pull qwen3.5:4b
+# La machine de dev n'a pas de GPU : modèle plus petit que le défaut (qwen3.5:9b).
+# qwen3:1.7b ne traduit pas : il romanise le coréen. Installation : ollama pull qwen3.5:4b
+model = "qwen3.5:4b"
 
 [ocr]
 device = "cpu"
