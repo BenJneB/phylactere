@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Webtoon Translator – Naver",
-  "version": "1.0.0",
-  "description": "Traduit en temps réel les bulles des webtoons de comic.naver.com (OCR Google Vision + Google Translate).",
-  "permissions": ["storage", "declarativeNetRequest", "unlimitedStorage"],
+  "name": "Phylactère",
+  "version": "2.0.0",
+  "description": "Traduit en temps réel les bulles des webtoons de comic.naver.com, avec un serveur local (OCR et LLM sur votre PC).",
+  "permissions": ["storage"],
   "host_permissions": [
     "https://comic.naver.com/*",
-    "https://image-comic.pstatic.net/*",
-    "https://vision.googleapis.com/*",
-    "https://translation.googleapis.com/*"
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -24,11 +23,11 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Webtoon Translator"
+    "default_title": "Phylactère"
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "webtoon-translator@local",
+      "id": "phylactere@local",
       "strict_min_version": "121.0"
     }
   }

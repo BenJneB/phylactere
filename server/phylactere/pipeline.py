@@ -32,6 +32,8 @@ class TranslateRequest(BaseModel):
     episode_id: str = Field(min_length=1, max_length=64)
     index: int = Field(ge=0)
     priority: Literal["visible", "prefetch"] = "visible"
+    # Modèle Ollama choisi dans l'extension (défaut : celui de la configuration).
+    model: str | None = Field(default=None, min_length=1, max_length=100)
     # Images voisines dans l'épisode : permettent de lire les bulles coupées entre deux images.
     prev_image_url: str | None = None
     next_image_url: str | None = None
@@ -157,7 +159,7 @@ class Pipeline:
                 check_url(url, self._settings.fetch)
 
         lang = request.target_lang or self._settings.translation.target_lang
-        model = self._settings.ollama.model
+        model = request.model or self._settings.ollama.model
         key = f"{sha1(request.image_url)}:{lang}:{model}:{prompt_id(self._settings.translation)}"
         timings = {"fetch": 0, "ocr": 0, "translate": 0}
 
@@ -185,7 +187,7 @@ class Pipeline:
             translations = await self.translation_queue.run(
                 key,
                 request.priority,
-                lambda: self._translator.translate(texts, lang, context, glossary),
+                lambda: self._translator.translate(texts, lang, context, glossary, model),
             )
         timings["translate"] = _ms(start)
 

@@ -5,50 +5,65 @@
 <style>
   :root {
     --bg: #f3f5fa; --ink: #1d2a44; --muted: #5d6a85; --field: #fff;
-    --line: #cfd6e4; --accent: #2f5bd3; --ok: #1f7a4d; --err: #a3262b;
+    --line: #cfd6e4; --accent: #2f5bd3; --ok: #1f7a4d; --warn: #9a5b00; --err: #a3262b;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #161c2a; --ink: #e8ecf5; --muted: #9aa6bf; --field: #222a3b;
-      --line: #36415a; --accent: #7d9bff; --ok: #5fd39a; --err: #ff8a8f;
+      --line: #36415a; --accent: #7d9bff; --ok: #5fd39a; --warn: #f0b45a; --err: #ff8a8f;
       color-scheme: dark;
     }
   }
-  body { width: 300px; margin: 0; padding: 16px; background: var(--bg); color: var(--ink);
+  body { width: 310px; margin: 0; padding: 16px; background: var(--bg); color: var(--ink);
          font: 14px/1.4 system-ui, sans-serif; }
-  h1 { margin: 0 0 4px; font-size: 17px; }
-  .bubble { position: relative; display: inline-block; padding: 6px 12px; margin-bottom: 14px;
+  h1 { margin: 0; font-size: 17px; }
+  .bubble { position: relative; display: inline-block; padding: 6px 12px; margin-bottom: 10px;
             background: var(--field); border: 2px solid var(--ink); border-radius: 18px; }
   .bubble::after { content: ""; position: absolute; left: 22px; bottom: -9px; width: 12px; height: 12px;
                    background: var(--field); border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink);
                    transform: rotate(45deg); }
+  .server { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 4px; font-size: 13px; }
+  .dot { flex: none; width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
   label { display: block; margin: 12px 0 4px; font-weight: 600; }
-  input[type=password], select { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--line);
-                                 border-radius: 6px; background: var(--field); color: var(--ink); font: inherit; }
-  .row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-  .row label { margin: 0; font-weight: 600; }
+  input[type=text], input[type=password], select {
+    width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--line);
+    border-radius: 6px; background: var(--field); color: var(--ink); font: inherit; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .row label { margin: 0; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .actions { display: flex; gap: 8px; margin-top: 16px; }
-  button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
-  #save { background: var(--accent); color: #fff; }
-  #clear { background: transparent; color: var(--accent); }
+  button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--accent); font: inherit;
+           font-weight: 600; cursor: pointer; }
+  .primary { background: var(--accent); color: #fff; }
+  .secondary { background: transparent; color: var(--accent); }
+  #grant { width: 100%; margin-top: 8px; }
   button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #status { min-height: 18px; margin-top: 10px; font-size: 12px; }
   .ok { color: var(--ok); } .err { color: var(--err); }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-  <div class="bubble"><h1>Webtoon Translator</h1></div>
+  <div class="bubble"><h1>Phylactère</h1></div>
+
+  <div class="server" role="status" aria-live="polite">
+    <span class="dot" id="dot"></span><span id="serverState">Connexion au serveur…</span>
+  </div>
+  <button id="grant" class="primary" hidden>Autoriser l’accès au serveur et à Naver</button>
 
   <div class="row">
     <input type="checkbox" id="enabled">
     <label for="enabled">Traduire les épisodes Naver</label>
   </div>
 
-  <label for="apiKey">Clé API Google Cloud</label>
-  <input type="password" id="apiKey" autocomplete="off" placeholder="AIza…">
-  <div class="hint">Cloud Vision API et Cloud Translation API doivent être activées pour cette clé.</div>
+  <label for="serverUrl">Adresse du serveur</label>
+  <input type="text" id="serverUrl" spellcheck="false" placeholder="http://127.0.0.1:8765">
+
+  <label for="token">Jeton</label>
+  <input type="password" id="token" autocomplete="off" spellcheck="false">
+  <div class="hint">Affiché dans la console au lancement du serveur (start.ps1).</div>
 
   <label for="targetLang">Traduire vers</label>
   <select id="targetLang">
@@ -58,6 +73,7 @@
     <option value="de">Allemand</option>
     <option value="it">Italien</option>
     <option value="pt">Portugais</option>
+    <option value="nl">Néerlandais</option>
     <option value="ja">Japonais</option>
     <option value="zh-CN">Chinois simplifié</option>
     <option value="ar">Arabe</option>
@@ -65,9 +81,14 @@
     <option value="id">Indonésien</option>
   </select>
 
+  <label for="model">Modèle de traduction</label>
+  <select id="model">
+    <option value="">Défaut du serveur</option>
+  </select>
+
   <div class="actions">
-    <button id="save">Enregistrer</button>
-    <button id="clear">Vider le cache</button>
+    <button id="save" class="primary">Enregistrer</button>
+    <button id="clear" class="secondary">Vider le cache</button>
   </div>
   <div id="status"></div>
   <div class="hint">Sur la page : Alt+T ou clic sur le badge pour revoir l’original, clic sur une bulle pour la masquer.</div>

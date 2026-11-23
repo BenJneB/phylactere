@@ -198,8 +198,8 @@ class OllamaTranslator:
         self._ollama = ollama_cfg
         self._cfg = translation_cfg
         # Qwen3 « réfléchit » par défaut avant de répondre (10 fois plus lent) : on le
-        # désactive. Si le modèle ne connaît pas cette option, on arrête de l'envoyer.
-        self._send_think = True
+        # désactive. Modèles qui ne connaissent pas cette option : on ne l'envoie plus.
+        self._no_think: set[str] = set()
 
     async def preload(self) -> bool:
         """Charge le modèle en mémoire (requête sans message) pour que la première
@@ -227,9 +227,9 @@ class OllamaTranslator:
         logger.info("Modèle de traduction %s chargé.", model)
         return True
 
-    async def _chat(self, system: str, user: str) -> str:
+    async def _chat(self, system: str, user: str, model: str) -> str:
         body = {
-            "model": self._ollama.model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -239,7 +239,8 @@ class OllamaTranslator:
             "keep_alive": self._ollama.keep_alive,
             "options": {"temperature": self._cfg.temperature},
         }
-        if self._send_think:
+        send_think = model not in self._no_think
+        if send_think:
             body["think"] = False
         try:
             response = await self._client.post(
@@ -252,12 +253,11 @@ class OllamaTranslator:
         except httpx.HTTPError as exc:
             raise TranslationError(f"Ollama injoignable ({self._ollama.url}) : {exc}", 503) from exc
 
-        if response.status_code == 400 and self._send_think and "think" in response.text:
-            logger.info("Le modèle %s ne gère pas l'option think : désactivée.", self._ollama.model)
-            self._send_think = False
-            return await self._chat(system, user)
+        if response.status_code == 400 and send_think and "think" in response.text:
+            logger.info("Le modèle %s ne gère pas l'option think : désactivée.", model)
+            self._no_think.add(model)
+            return await self._chat(system, user, model)
         if response.status_code == 404:
-            model = self._ollama.model
             raise TranslationError(
                 f"Modèle « {model} » absent d'Ollama : lance « ollama pull {model} ».", 503
             )
@@ -280,11 +280,13 @@ class OllamaTranslator:
         target_lang: str,
         context: list[tuple[str, str]],
         glossary: list[GlossaryEntry],
+        model: str,
     ) -> dict[int, str]:
         """Une requête ; renvoie les traductions reçues pour les ids demandés."""
         content = await self._chat(
             system_prompt(target_lang, self._cfg.examples),
             user_prompt(items, target_lang, context, glossary, self._cfg.context_mode),
+            model,
         )
         try:
             parsed = _Response.model_validate_json(content)
@@ -302,8 +304,13 @@ class OllamaTranslator:
         target_lang: str,
         context: list[tuple[str, str]] | None = None,
         glossary: list[GlossaryEntry] | None = None,
+        model: str | None = None,
     ) -> list[str]:
-        """Traduit les bulles d'une image ; renvoie une traduction par texte, dans l'ordre."""
+        """Traduit les bulles d'une image ; renvoie une traduction par texte, dans l'ordre.
+
+        ``model`` : modèle Ollama à utiliser (défaut : celui de la configuration).
+        """
+        model = model or self._ollama.model
         context = context or []
         glossary = glossary or []
         pending = {index: text for index, text in enumerate(texts, start=1)}
@@ -314,7 +321,7 @@ class OllamaTranslator:
             if not pending:
                 break
             try:
-                results.update(await self._request(pending, target_lang, context, glossary))
+                results.update(await self._request(pending, target_lang, context, glossary, model))
             except _InvalidResponse as exc:
                 logger.warning("Tentative %d : %s", attempt, exc)
             pending = {k: v for k, v in pending.items() if k not in results}
@@ -322,7 +329,7 @@ class OllamaTranslator:
         # Dernier recours : une requête par bulle encore manquante.
         for item_id, text in pending.items():
             try:
-                found = await self._request({1: text}, target_lang, context, glossary)
+                found = await self._request({1: text}, target_lang, context, glossary, model)
             except _InvalidResponse as exc:
                 logger.warning("Bulle %d : %s", item_id, exc)
                 found = {}

@@ -38,9 +38,25 @@ uv --directory server run --no-sync python -m phylactere --check-ocr
 powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1
 ```
 
-Le serveur écoute sur `http://127.0.0.1:8765` et affiche son **jeton** (à saisir plus tard dans l'extension). Vérification : ouvrir http://127.0.0.1:8765/health dans le navigateur.
+Le serveur écoute sur `http://127.0.0.1:8765` et affiche son **jeton** (à saisir dans l'extension, voir plus bas). Vérification : ouvrir http://127.0.0.1:8765/health dans le navigateur.
 
 La configuration est dans `%LOCALAPPDATA%\phylactere\config.toml`.
+
+## Extension du navigateur
+
+Le dossier `extension` contient l'extension (Chrome, Edge, Brave et Firefox 121+). Elle n'a besoin d'aucune installation de paquet.
+
+**Chrome / Edge / Brave** : `chrome://extensions` › activer le **mode développeur** › « Charger l'extension non empaquetée » › choisir le dossier `extension`.
+
+**Firefox** : `about:debugging#/runtime/this-firefox` › « Charger un module complémentaire temporaire » › choisir `extension\manifest.json`. Le module est retiré à la fermeture de Firefox (une installation permanente demande de signer l'extension sur addons.mozilla.org, en distribution « non listée »). Si le popup affiche « Autoriser l'accès au serveur et à Naver », cliquer dessus : Firefox n'accorde pas toujours ces permissions à l'installation.
+
+Ensuite, ouvrir le popup de l'extension (icône dans la barre d'outils), coller le **jeton** affiché par `start.ps1`, puis **Enregistrer**. La pastille passe au vert quand le serveur est prêt.
+
+Utilisation : ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la progression (« Serveur arrêté » si `start.ps1` n'est pas lancé : l'extension réessaie toutes les 5 s).
+
+- **Alt+T** ou clic sur le badge : afficher / masquer toutes les traductions ;
+- clic sur une bulle : la masquer pour voir l'original (re-clic pour la remettre) ; survoler une bulle affiche le texte coréen reconnu ;
+- changer de langue ou de modèle dans le popup retraduit la page (l'OCR, en cache, n'est pas refait).
 
 ## Modèle de traduction
 
