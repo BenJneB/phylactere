@@ -27,6 +27,7 @@ class World:
     def __init__(self, bubbles=("안녕", "가자")):
         self.image_requests: list[str] = []
         self.ollama_bodies: list[dict] = []
+        self.preloads: list[dict] = []
         self.ollama_down = False
         self.bubbles = bubbles
         self.detector_calls = 0
@@ -41,6 +42,9 @@ class World:
         if self.ollama_down:
             raise httpx.ConnectError("refusé", request=request)
         body = json.loads(request.content)
+        if not body["messages"]:  # préchargement du modèle au démarrage
+            self.preloads.append(body)
+            return httpx.Response(200, json={})
         self.ollama_bodies.append(body)
         bubbles = json.loads(body["messages"][1]["content"].rsplit("\n", 1)[1])
         content = {"translations": [{"id": b["id"], "text": f"FR:{b['texte']}"} for b in bubbles]}
@@ -227,3 +231,15 @@ def test_clear_cache(client, world):
     client.post("/translate", json=request())
     assert world.detector_calls == 2
     assert client.delete("/cache").json()["removed"] == 2
+
+
+def test_model_is_preloaded_at_startup(client, world):
+    import time
+
+    deadline = time.monotonic() + 5  # le préchargement tourne en tâche de fond
+    while not world.preloads and time.monotonic() < deadline:
+        time.sleep(0.01)
+    settings = load_settings()
+    assert world.preloads == [
+        {"model": settings.ollama.model, "messages": [], "keep_alive": settings.ollama.keep_alive}
+    ]

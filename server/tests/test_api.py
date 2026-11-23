@@ -11,6 +11,8 @@ TAGS = {"models": [{"name": "qwen3:1.7b"}]}
 
 
 def ollama_up(request: httpx.Request) -> httpx.Response:
+    if request.url.path == "/api/chat":  # préchargement du modèle au démarrage
+        return httpx.Response(200, json={})
     assert request.url.path == "/api/tags"
     return httpx.Response(200, json=TAGS)
 

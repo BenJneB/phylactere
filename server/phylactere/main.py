@@ -1,5 +1,6 @@
 """Application FastAPI et routes."""
 
+import asyncio
 import logging
 import secrets
 from collections.abc import AsyncIterator
@@ -99,9 +100,12 @@ def create_app(
             pipeline.start()
             app.state.cache = cache
             app.state.pipeline = pipeline
+            # Charge le modèle de traduction pendant que l'utilisateur ouvre l'épisode.
+            preload = asyncio.create_task(translator.preload())
             try:
                 yield
             finally:
+                preload.cancel()
                 await pipeline.stop()
                 cache.close()
                 engine.close()

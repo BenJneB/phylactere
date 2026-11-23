@@ -40,6 +40,25 @@ LANGUAGE_NAMES = {
     "id": "indonésien",
 }
 
+# Exemples d'onomatopées (variante ``examples``). Choisis absents de l'épisode de test du
+# jalon 4 (729047/66) pour ne pas fausser la comparaison des modèles.
+SFX_EXAMPLES = [
+    ("쿵", "Boum"),
+    ("휙", "Fiou"),
+    ("두근두근", "Boum boum"),
+    ("헉", "Hein ?!"),
+    ("흑흑", "Snif snif"),
+    ("쾅", "Bang"),
+    ("휴", "Pfiou"),
+    ("킥킥", "Hi hi"),
+]
+
+
+def prompt_id(cfg: TranslationConfig) -> str:
+    """Identifiant du prompt pour la clé de cache : version et variantes utilisées."""
+    return f"{PROMPT_VERSION}-{cfg.context_mode}-{int(cfg.examples)}"
+
+
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -86,9 +105,9 @@ def language_name(code: str) -> str:
     return LANGUAGE_NAMES.get(code, code)
 
 
-def system_prompt(target_lang: str) -> str:
+def system_prompt(target_lang: str, examples: bool = False) -> str:
     language = language_name(target_lang)
-    return f"""Tu es un traducteur professionnel de webtoons coréens. Tu traduis chaque bulle \
+    prompt = f"""Tu es un traducteur professionnel de webtoons coréens. Tu traduis chaque bulle \
 du coréen en {language} (code {target_lang}). Écris uniquement en {language}, jamais en \
 anglais ni dans une autre langue (sauf si la cible est l'anglais).
 
@@ -110,6 +129,11 @@ n'en oublie aucune.
 Réponds uniquement avec ce JSON, une entrée par bulle, en recopiant d'abord le texte \
 coréen de la bulle puis sa traduction :
 {{"translations": [{{"id": <id>, "original": "<coréen recopié>", "text": "<traduction>"}}]}}"""
+    # Les exemples sont en français : inutiles (voire trompeurs) pour une autre langue.
+    if examples and target_lang == "fr":
+        pairs = ", ".join(f"{ko} → {fr}" for ko, fr in SFX_EXAMPLES)
+        prompt += f"\n\nExemples d'onomatopées : {pairs}."
+    return prompt
 
 
 def user_prompt(
@@ -117,13 +141,20 @@ def user_prompt(
     target_lang: str,
     context: list[tuple[str, str]],
     glossary: list[GlossaryEntry],
+    context_mode: str = "pairs",
 ) -> str:
     language = language_name(target_lang)
     parts = []
     if glossary:
         lines = [f"- {e.ko} → {e.fr}" + (f" ({e.note})" if e.note else "") for e in glossary]
         parts.append(f"Glossaire de la série (coréen → {language}) :\n" + "\n".join(lines))
-    if context:
+    if context and context_mode == "original":
+        lines = [f"- {original}" for original, _ in context]
+        parts.append(
+            "Bulles précédentes de l'épisode, en coréen (contexte pour comprendre la scène, "
+            "ne pas les traduire) :\n" + "\n".join(lines)
+        )
+    elif context:
         lines = [f"- {original} → {translated}" for original, translated in context]
         parts.append(
             "Bulles précédentes de l'épisode, déjà traduites (contexte, ne pas les "
@@ -149,6 +180,32 @@ class OllamaTranslator:
         # Qwen3 « réfléchit » par défaut avant de répondre (10 fois plus lent) : on le
         # désactive. Si le modèle ne connaît pas cette option, on arrête de l'envoyer.
         self._send_think = True
+
+    async def preload(self) -> bool:
+        """Charge le modèle en mémoire (requête sans message) pour que la première
+        traduction n'attende pas ce chargement (jusqu'à une minute à froid)."""
+        model = self._ollama.model
+        try:
+            response = await self._client.post(
+                "/api/chat",
+                json={"model": model, "messages": [], "keep_alive": self._ollama.keep_alive},
+                timeout=self._ollama.timeout_s,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("Préchargement de %s impossible (Ollama injoignable) : %s", model, exc)
+            return False
+        if response.status_code == 404:
+            logger.warning(
+                "Modèle « %s » absent d'Ollama : lance « ollama pull %s ».", model, model
+            )
+            return False
+        if response.status_code != 200:
+            logger.warning(
+                "Préchargement de %s : Ollama a répondu %s.", model, response.status_code
+            )
+            return False
+        logger.info("Modèle de traduction %s chargé.", model)
+        return True
 
     async def _chat(self, system: str, user: str) -> str:
         body = {
@@ -202,7 +259,8 @@ class OllamaTranslator:
     ) -> dict[int, str]:
         """Une requête ; renvoie les traductions reçues pour les ids demandés."""
         content = await self._chat(
-            system_prompt(target_lang), user_prompt(items, target_lang, context, glossary)
+            system_prompt(target_lang, self._cfg.examples),
+            user_prompt(items, target_lang, context, glossary, self._cfg.context_mode),
         )
         try:
             parsed = _Response.model_validate_json(content)
