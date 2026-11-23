@@ -32,6 +32,11 @@ target_lang = "fr"
 context_size = 15
 # 0 = déterministe ; un peu de variété rend le texte plus naturel
 temperature = 0.2
+# Forme du contexte : "pairs" (coréen + traduction) ou "original" (coréen seul : le modèle
+# ne peut pas recopier une erreur de traduction précédente)
+context_mode = "pairs"
+# Ajoute au prompt quelques exemples d'onomatopées traduites (langue cible française)
+examples = false
 
 [ocr]
 # "auto" (GPU si PaddlePaddle GPU est installé et qu'une carte NVIDIA répond, sinon CPU),

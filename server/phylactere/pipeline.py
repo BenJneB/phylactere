@@ -17,7 +17,7 @@ from phylactere.fetch import FetchError, check_url, decode_image, fetch_bytes
 from phylactere.ocr import OcrEngine
 from phylactere.queue import PriorityRunner
 from phylactere.schemas import ImageSize, OcrResult
-from phylactere.translate import PROMPT_VERSION, OllamaTranslator
+from phylactere.translate import OllamaTranslator, prompt_id
 
 logger = logging.getLogger("phylactere.pipeline")
 
@@ -158,7 +158,7 @@ class Pipeline:
 
         lang = request.target_lang or self._settings.translation.target_lang
         model = self._settings.ollama.model
-        key = f"{sha1(request.image_url)}:{lang}:{model}:{PROMPT_VERSION}"
+        key = f"{sha1(request.image_url)}:{lang}:{model}:{prompt_id(self._settings.translation)}"
         timings = {"fetch": 0, "ocr": 0, "translate": 0}
 
         cached = await self._cache.get_translation(key)

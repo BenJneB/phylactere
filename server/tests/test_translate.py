@@ -162,3 +162,77 @@ def test_prompts_name_the_target_language():
     assert "français" in system_prompt("fr")
     assert "Bulles à traduire en japonais" in user_prompt({1: "안녕"}, "ja", [], [])
     assert "xx" in system_prompt("xx")  # langue inconnue : le code est repris tel quel
+
+
+def preload(handler) -> bool:
+    async def go():
+        async with httpx.AsyncClient(
+            base_url="http://ollama", transport=httpx.MockTransport(handler)
+        ) as client:
+            return await OllamaTranslator(client, SETTINGS.ollama, SETTINGS.translation).preload()
+
+    return asyncio.run(go())
+
+
+def test_preload_sends_empty_chat():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"model": SETTINGS.ollama.model, "done": True})
+
+    assert preload(handler) is True
+    assert seen == [
+        {"model": SETTINGS.ollama.model, "messages": [], "keep_alive": SETTINGS.ollama.keep_alive}
+    ]
+
+
+@pytest.mark.parametrize("status", [404, 500])
+def test_preload_failure_is_not_fatal(status):
+    assert preload(lambda request: httpx.Response(status)) is False
+
+
+def test_preload_with_ollama_down_is_not_fatal():
+    def down(request):
+        raise httpx.ConnectError("refusé", request=request)
+
+    assert preload(down) is False
+
+
+def test_examples_variant_adds_sfx_examples_in_french_only():
+    assert "Exemples d'onomatopées" not in system_prompt("fr")
+    assert "쿵 → Boum" in system_prompt("fr", examples=True)
+    assert "Exemples d'onomatopées" not in system_prompt("en", examples=True)
+
+
+def test_original_context_mode_hides_previous_translations():
+    context = [("꼬랑지!!", "Qu'est-ce qui ?!")]
+    pairs = user_prompt({1: "가"}, "fr", context, [], "pairs")
+    original = user_prompt({1: "가"}, "fr", context, [], "original")
+
+    assert "꼬랑지!! → Qu'est-ce qui ?!" in pairs
+    assert "- 꼬랑지!!" in original and "Qu'est-ce qui" not in original
+
+
+def test_variants_reach_the_request():
+    fake = FakeOllama({1: "Salut"})
+    cfg = SETTINGS.translation.model_copy(update={"examples": True, "context_mode": "original"})
+
+    async def go():
+        async with httpx.AsyncClient(base_url="http://o", transport=httpx.MockTransport(fake)) as c:
+            await OllamaTranslator(c, SETTINGS.ollama, cfg).translate(
+                ["안녕"], "fr", context=[("가", "A")]
+            )
+
+    asyncio.run(go())
+    system, user = (m["content"] for m in fake.bodies[0]["messages"])
+    assert "Exemples d'onomatopées" in system
+    assert "- 가" in user and "→ A" not in user
+
+
+def test_prompt_id_changes_with_variants():
+    from phylactere.translate import prompt_id
+
+    base = prompt_id(SETTINGS.translation)
+    assert base != prompt_id(SETTINGS.translation.model_copy(update={"examples": True}))
+    assert base != prompt_id(SETTINGS.translation.model_copy(update={"context_mode": "original"}))

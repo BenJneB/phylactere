@@ -50,6 +50,8 @@ class TranslationConfig(_Section):
     target_lang: str
     context_size: int = Field(ge=0)
     temperature: float = Field(ge=0, le=2)
+    context_mode: Literal["pairs", "original"]
+    examples: bool
 
 
 class OcrConfig(_Section):

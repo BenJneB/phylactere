@@ -61,6 +61,7 @@ phylactere/
 │  │  ├─ cache.py            SQLite
 │  │  └─ queue.py            files de priorité OCR / traduction
 │  └─ tests/
+├─ bench/references/         traductions de référence pour le banc d'essai (texte seul)
 ├─ scripts/
 │  ├─ install.ps1            installation Windows (uv, dépendances, PaddlePaddle GPU/CPU)
 │  ├─ start.ps1              lance le serveur (Windows)
@@ -146,6 +147,7 @@ Les seuils sont dans la configuration. Une amélioration ultérieure possible es
 ### 5.5 Traduction (`translate.py`)
 
 - Ollama via `POST /api/chat`, `stream: false`, `keep_alive: "30m"`, `options.temperature` 0,2, `think: false` : Qwen3 « réfléchit » par défaut avant de répondre, ce qui multiplie le temps par 7 à 10 (mesuré : 27,7 s contre 3,7 s) sans intérêt pour une bulle. Si le modèle ne connaît pas l'option, elle n'est plus envoyée.
+- Préchargement : au démarrage, le serveur demande à Ollama de charger le modèle (requête `/api/chat` sans message), en tâche de fond. Sans ça, la première image attendait le chargement à froid (58 s mesurées sur le PC de référence, pour un objectif de 15 s). Un échec (Ollama arrêté, modèle absent) n'est qu'un avertissement dans la console.
 - Sortie structurée : passer un schéma JSON dans `format`, de la forme `{ "translations": [ { "id": int, "original": string, "text": string } ] }`. Toutes les bulles d'une image partent dans une seule requête, chacune avec un `id`. Le modèle recopie le texte coréen (`original`) avant de le traduire : sans cette recopie, qwen3:4b mélangeait ou oubliait des bulles (0 réponse correcte sur 4 essais sur une image de 3 bulles, 4 sur 4 avec). Le serveur n'utilise pas la recopie.
 - Prompt système (en français, versionné avec une constante `PROMPT_VERSION`) : traducteur de webtoons coréens, français oral naturel et concis adapté à une bulle, respect du registre (familier, poli, honorifiques), onomatopées adaptées en français, noms propres selon le glossaire, aucune explication ni note.
 - Contexte : ajouter les 15 dernières bulles déjà traduites du même épisode (original + traduction) pour la cohérence du ton et des noms. « Dernières » dans l'ordre de lecture : bulles des images d'index inférieur, même langue et même modèle (avec le préchargement, les images ne sont pas traduites dans l'ordre).
@@ -239,6 +241,11 @@ Chaque jalon se termine par des tests qui passent et une vérification manuelle 
 2. **OCR** : fetch avec allowlist, PaddleOCR coréen, découpage en tranches, regroupement en bulles. Route de debug `POST /debug/ocr` qui renvoie une image PNG avec les boîtes dessinées. Critère : les bulles des images de `samples/` sont correctement encadrées.
 3. **Traduction** : client Ollama, schéma JSON, contexte, glossaire, cache, files à priorité, lecture des bulles coupées entre deux images. Critère : `POST /translate` renvoie des traductions complètes pour toutes les images de `samples/` (`scripts/translate_samples.py`). Modèle par défaut provisoire : `qwen3:4b` (tient dans 8 Go avec l'OCR ; `qwen3:1.7b` romanise le coréen au lieu de le traduire).
 4. **Choix du modèle** (sur le PC Windows) : `bench.py`, comparaison de 2 ou 3 modèles sur vitesse et qualité (relecture humaine), choix du défaut documenté dans le README.
+   Méthode retenue :
+   - candidats qui tiennent dans 8 Go avec l'OCR : `qwen3:4b`, `qwen3:8b`, `qwen3.5:4b`, `gemma3:4b`, `translategemma:4b`, `exaone3.5:7.8b` (pour 16 Go, une option plus grosse est documentée sans mesure : pas de machine pour la vérifier) ;
+   - `scripts/bench.py` fait l'OCR une fois, puis chaque modèle traduit l'épisode dans l'ordre avec son propre contexte ; il mesure chargement à froid, part du modèle sur le GPU, temps par image (moyenne, maximum) et produit un rapport HTML local (`samples/bench/`) ;
+   - relecture à l'aveugle (traductions regroupées, ordre aléatoire, modèles masqués) en deux tours : les 6 modèles avec le prompt actuel, puis les meilleurs avec les variantes de prompt (`context_mode`, `examples`) ;
+   - l'utilisateur ne lit pas le coréen : une traduction de référence rédigée par Claude (`bench/references/<titleId>-<no>.json`, texte seul) sert d'appui pour juger le sens. Elle signale aussi les erreurs d'OCR (onomatopées stylisées mal lues).
 5. **Extension** : adaptation de la v1, popup, gestion serveur arrêté, priorités. Critère : lecture d'un épisode complet dans Chrome puis Firefox.
 6. **Finition** : autostart, README complet, dépannage, nettoyage du cache par série.
 
