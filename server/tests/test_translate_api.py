@@ -129,11 +129,11 @@ def test_other_language_reuses_ocr_but_translates_again(client, world):
 
 def test_model_chosen_by_extension(client, world):
     client.post("/translate", json=request())
-    response = client.post("/translate", json=request(model="qwen3.5:9b"))
+    response = client.post("/translate", json=request(model="gemma3:4b"))
 
     assert response.json()["cached"] is False  # le cache dépend du modèle
     assert world.detector_calls == 1  # OCR en cache
-    assert [b["model"] for b in world.ollama_bodies] == [load_settings().ollama.model, "qwen3.5:9b"]
+    assert [b["model"] for b in world.ollama_bodies] == [load_settings().ollama.model, "gemma3:4b"]
 
 
 def test_previous_images_give_context(client, world):

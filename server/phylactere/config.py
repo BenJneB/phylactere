@@ -22,6 +22,7 @@ ENV_CONFIG = "PHYLACTERE_CONFIG"
 # vrais dossiers de l'utilisateur.
 ENV_CONFIG_DIR = "PHYLACTERE_CONFIG_DIR"
 ENV_CACHE_DIR = "PHYLACTERE_CACHE_DIR"
+ENV_LOG_DIR = "PHYLACTERE_LOG_DIR"
 EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "config.example.toml"
 
 
@@ -113,6 +114,13 @@ def cache_dir() -> Path:
     if custom := os.environ.get(ENV_CACHE_DIR):
         return Path(custom)
     return Path(platformdirs.user_cache_dir(APP_NAME, appauthor=False))
+
+
+def log_dir() -> Path:
+    """Dossier des journaux (Windows : %LOCALAPPDATA%\\phylactere\\Logs)."""
+    if custom := os.environ.get(ENV_LOG_DIR):
+        return Path(custom)
+    return Path(platformdirs.user_log_dir(APP_NAME, appauthor=False))
 
 
 def config_dir() -> Path:

@@ -4,17 +4,21 @@ Lit le port dans la configuration et écoute toujours sur 127.0.0.1.
 """
 
 import argparse
+import copy
 import sys
 import time
 from pathlib import Path
 
+import httpx
 import uvicorn
+import uvicorn.config
 
 from phylactere import __version__
 from phylactere.config import (
     ConfigError,
     Settings,
     load_settings,
+    log_dir,
     override_path,
     user_config_path,
 )
@@ -22,6 +26,9 @@ from phylactere.config import (
 HOST = "127.0.0.1"
 CHECK_IMAGE = Path(__file__).resolve().parent.parent / "tests" / "data" / "korean_sample.png"
 CHECK_EXPECTED = "안녕하세요"
+LOG_FILE = "server.log"
+LOG_MAX_BYTES = 2_000_000
+LOG_BACKUPS = 3
 
 
 def use_utf8_output() -> None:
@@ -33,6 +40,46 @@ def use_utf8_output() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def log_config(level: str, path: Path) -> dict:
+    """Configuration des journaux : console (comme uvicorn) et fichier tournant.
+
+    Le fichier sert surtout au démarrage automatique, où la console est cachée.
+    Le jeton n'y est jamais écrit (il n'est qu'affiché dans la console).
+    """
+    config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config["formatters"]["file"] = {
+        "format": "%(asctime)s %(levelname)-7s %(name)s : %(message)s",
+    }
+    config["handlers"]["file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "formatter": "file",
+        "filename": str(path),
+        "maxBytes": LOG_MAX_BYTES,
+        "backupCount": LOG_BACKUPS,
+        "encoding": "utf-8",
+    }
+    for name in ("uvicorn", "uvicorn.access"):
+        config["loggers"][name]["handlers"].append("file")
+    # Journaux de Phylactère (et des bibliothèques) : fichier seulement, la console
+    # les reçoit déjà par le gestionnaire que paddlex installe.
+    config["root"] = {"handlers": ["file"], "level": level.upper()}
+    # Détail de chaque connexion HTTP (Ollama, images) : illisible même en debug.
+    config["loggers"]["httpcore"] = {"level": "WARNING"}
+    return config
+
+
+def already_running(port: int) -> str | None:
+    """Version du serveur Phylactère qui répond déjà sur ce port, ou None."""
+    try:
+        response = httpx.get(f"http://{HOST}:{port}/health", timeout=1.0)
+        data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if response.status_code == 200 and isinstance(data, dict) and data.get("ok") is True:
+        return str(data.get("version", "?"))
+    return None
 
 
 def check_ocr(settings: Settings) -> int:
@@ -93,10 +140,18 @@ def main(argv: list[str] | None = None) -> int:
         return check_ocr(settings)
 
     port = args.port or settings.server.port
+    # Démarrage automatique + lancement manuel : le second s'arrête proprement.
+    if (running := already_running(port)) is not None:
+        print(f"Phylactère {running} est déjà lancé sur http://{HOST}:{port} : rien à faire.")
+        return 0
+
+    logs = log_dir()
+    logs.mkdir(parents=True, exist_ok=True)
     print(f"Phylactère {__version__}")
     print(f"Configuration : {user_config_path()}")
     if (extra := override_path()) is not None:
         print(f"Surcharges    : {extra}")
+    print(f"Journal       : {logs / LOG_FILE}")
     print(f"Adresse       : http://{HOST}:{port}")
     print(f"Jeton         : {settings.server.token}")
     print("(à saisir dans le popup de l'extension)", flush=True)
@@ -108,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         port=port,
         reload=args.reload,
         log_level=settings.server.log_level,
+        log_config=log_config(settings.server.log_level, logs / LOG_FILE),
     )
     return 0
 

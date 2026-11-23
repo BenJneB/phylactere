@@ -66,7 +66,8 @@ phylactere/
 │  ├─ install.ps1            installation Windows (uv, dépendances, PaddlePaddle GPU/CPU)
 │  ├─ start.ps1              lance le serveur (Windows)
 │  ├─ start.sh               lance le serveur (Ubuntu, dev)
-│  └─ install-autostart.ps1  démarrage auto à l'ouverture de session (optionnel)
+│  ├─ install-autostart.ps1  démarrage auto à l'ouverture de session (optionnel)
+│  └─ stop.ps1               arrête le serveur (lancé sans fenêtre par le démarrage auto)
 └─ samples/                  images de test locales, dans .gitignore
 ```
 
@@ -259,9 +260,15 @@ Chaque jalon se termine par des tests qui passent et une vérification manuelle 
    - tour 1 (prompt actuel) : `qwen3.5:4b` 59, `qwen3:8b` 53, `gemma3:4b` 47, `translategemma:4b` 41, `qwen3:4b` 38, `exaone3.5:7.8b` 26 ;
    - tour 2 (variantes) : `qwen3.5:9b` 64, `qwen3.5:4b` 57, `qwen3:8b` 50 avec le prompt actuel. Les exemples d'onomatopées et l'absence de contexte dégradent toujours le résultat ; le contexte en coréen seul ne fait jamais mieux. Le prompt reste donc inchangé (`context_mode = "pairs"`, `examples = false`) ;
    - vitesse en mode « Meilleures performances » : `qwen3.5:4b` 1,5 s/image, `qwen3.5:9b` 6,1 s/image (6,5 Go de mémoire vidéo avec l'OCR : il frôle la limite de 8 Go et ralentit fortement). Les autres séries ont été faites en mode « Meilleure efficacité », et deux séries dans ce même mode ont donné des temps très différents (1,9 et 4,2 s/image pour `qwen3.5:4b`) sans explication établie. Le banc mesure depuis les débits en jetons par seconde (génération et lecture du prompt, d'après les compteurs d'Ollama), les jetons par bulle et les nouvelles tentatives : ils distinguent une carte bridée de réponses plus longues ;
-   - **décision : `qwen3.5:4b` par défaut**. `qwen3.5:9b` est documenté comme alternative pour les cartes de 12 Go ou plus (non mesuré, faute de machine).
+   - décision du jalon 4 : `qwen3.5:4b` par défaut, `qwen3.5:9b` en alternative pour les cartes de 12 Go ou plus ;
+   - **révisée au jalon 5 : `qwen3.5:9b` par défaut**. Une nouvelle série sur le même PC donne `qwen3.5:9b` à 1,4 s/image (55,7 jetons/s, 100 % sur le GPU) et `qwen3.5:4b` à 1,2 s/image : les 6,1 s/image du jalon 4 venaient d'une carte saturée ou bridée, pas du modèle (explication probable : mémoire vidéo occupée par une autre application, débordement silencieux dans la mémoire partagée de Windows). En lecture réelle avec l'extension, `qwen3.5:9b` traduit mieux et ses traductions, plus concises, tiennent dans les bulles avec une police lisible (celles de `qwen3.5:4b` font tomber la police au minimum). `qwen3.5:4b` reste l'alternative pour les cartes de moins de 8 Go ou une mémoire vidéo saturée. La machine de dev Ubuntu (sans GPU) garde `qwen3.5:4b` dans `config.dev.toml`.
 5. **Extension** : adaptation de la v1, popup, gestion serveur arrêté, priorités. Critère : lecture d'un épisode complet dans Chrome puis Firefox.
 6. **Finition** : autostart, README complet, dépannage, nettoyage du cache par série.
+   Réalisation :
+   - `install-autostart.ps1` crée un raccourci dans le dossier Démarrage de l'utilisateur (pas de tâche planifiée : un déclencheur à l'ouverture de session demande souvent les droits d'administrateur), qui lance `start.ps1` sans fenêtre, puis démarre le serveur ; `-Remove` retire le raccourci. `stop.ps1` arrête les processus `python -m phylactere`.
+   - Console cachée : le serveur écrit aussi son journal dans le dossier de logs `platformdirs` (`%LOCALAPPDATA%\phylactere\Logs\server.log`, fichier tournant de 2 Mo, 3 sauvegardes ; `PHYLACTERE_LOG_DIR` le déplace). Le jeton n'y est jamais écrit.
+   - Un second lancement (démarrage auto puis `start.ps1`) détecte le serveur qui répond sur `/health` et s'arrête sans erreur.
+   - Popup : « Vider le cache de cette série » (série de l'onglet actif, `DELETE /cache?series_id=`) à côté de « Vider tout le cache ».
 
 ## 10. Hors périmètre v1
 
