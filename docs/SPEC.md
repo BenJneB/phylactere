@@ -87,25 +87,28 @@ Le modèle OCR se charge en arrière-plan au démarrage : `ocr` vaut `loading` p
   "series_id": "123456",
   "episode_id": "12",
   "index": 7,
-  "priority": "visible"
+  "priority": "visible",
+  "prev_image_url": "https://image-comic.pstatic.net/…",
+  "next_image_url": "https://image-comic.pstatic.net/…"
 }
 ```
+`target_lang` est facultatif (défaut : la configuration). `prev_image_url` et `next_image_url` (facultatifs) désignent les images voisines dans l'épisode : Naver découpe les épisodes en bandes de 1600 px et une bulle, voire une ligne, peut être coupée entre deux images (cas réel : épisode 729047/66, images 14-15). Le serveur lit l'image prolongée par `neighbor_margin` px de chaque voisine de même largeur ; une bulle appartient à l'image qui contient son haut, et sa boîte peut déborder en bas sur l'image suivante (qui l'ignore). Une voisine illisible est ignorée.
 Réponse :
 ```json
 {
   "blocks": [
-    { "box": { "x": 120, "y": 340, "w": 210, "h": 96 }, "original": "…", "translated": "…" }
+    { "box": { "x": 120, "y": 340, "w": 210, "h": 96 }, "original": "…", "translated": "…", "edges": [] }
   ],
   "image_size": { "w": 690, "h": 1600 },
   "cached": false,
   "timings_ms": { "fetch": 80, "ocr": 260, "translate": 4200 }
 }
 ```
-Coordonnées en pixels de l'image d'origine.
+Coordonnées en pixels de l'image d'origine (`y + h` peut dépasser la hauteur de l'image : bulle qui déborde sur la suivante). `edges` (`top`, `bottom`) signale une bulle qui touche un bord sans voisine pour la compléter. Erreurs : 400 (URL refusée), 502/504 (serveur d'images, Ollama), 503 (OCR en chargement, Ollama arrêté ou modèle absent, avec un message qui donne la commande `ollama pull`).
 
-`GET /glossary/{series_id}` et `PUT /glossary/{series_id}` : lecture et remplacement du glossaire (liste `{ "ko": "…", "fr": "…", "note": "…" }`).
+`GET /glossary/{series_id}` et `PUT /glossary/{series_id}` : lecture et remplacement du glossaire (liste `{ "ko": "…", "fr": "…", "note": "…" }` ; `fr` est la traduction dans la langue cible). Remplacer le glossaire efface les traductions en cache de la série, qui seront refaites avec lui.
 
-`DELETE /cache` : vide le cache (option `?series_id=`).
+`DELETE /cache` : vide le cache OCR et traductions (option `?series_id=`) ; les glossaires sont conservés. Renvoie `{ "removed": n }`.
 
 `POST /debug/ocr` (outil de mise au point) : formulaire `multipart/form-data` avec soit `image_url` (téléchargée comme pour `/translate`, allowlist comprise), soit `file` (image envoyée). Renvoie un PNG annoté : lignes en rouge, bulles en vert et numérotées, bulles touchant le bord de l'image en orange. Avec `?format=json`, renvoie `{ "image_size": …, "bubbles": [ { "box", "text", "lines", "edges" } ] }`.
 
@@ -142,24 +145,24 @@ Les seuils sont dans la configuration. Une amélioration ultérieure possible es
 
 ### 5.5 Traduction (`translate.py`)
 
-- Ollama via `POST /api/chat`, `stream: false`, `keep_alive: "30m"`, `options.temperature` 0,2.
-- Sortie structurée : passer un schéma JSON dans `format`, de la forme `{ "translations": [ { "id": int, "text": string } ] }`. Toutes les bulles d'une image partent dans une seule requête, chacune avec un `id`.
+- Ollama via `POST /api/chat`, `stream: false`, `keep_alive: "30m"`, `options.temperature` 0,2, `think: false` : Qwen3 « réfléchit » par défaut avant de répondre, ce qui multiplie le temps par 7 à 10 (mesuré : 27,7 s contre 3,7 s) sans intérêt pour une bulle. Si le modèle ne connaît pas l'option, elle n'est plus envoyée.
+- Sortie structurée : passer un schéma JSON dans `format`, de la forme `{ "translations": [ { "id": int, "original": string, "text": string } ] }`. Toutes les bulles d'une image partent dans une seule requête, chacune avec un `id`. Le modèle recopie le texte coréen (`original`) avant de le traduire : sans cette recopie, qwen3:4b mélangeait ou oubliait des bulles (0 réponse correcte sur 4 essais sur une image de 3 bulles, 4 sur 4 avec). Le serveur n'utilise pas la recopie.
 - Prompt système (en français, versionné avec une constante `PROMPT_VERSION`) : traducteur de webtoons coréens, français oral naturel et concis adapté à une bulle, respect du registre (familier, poli, honorifiques), onomatopées adaptées en français, noms propres selon le glossaire, aucune explication ni note.
-- Contexte : ajouter les 15 dernières bulles déjà traduites du même épisode (original + traduction) pour la cohérence du ton et des noms.
+- Contexte : ajouter les 15 dernières bulles déjà traduites du même épisode (original + traduction) pour la cohérence du ton et des noms. « Dernières » dans l'ordre de lecture : bulles des images d'index inférieur, même langue et même modèle (avec le préchargement, les images ne sont pas traduites dans l'ordre).
 - Glossaire de la série injecté dans le prompt.
 - Si la réponse n'est pas un JSON valide ou si des `id` manquent : une nouvelle tentative, puis traduction bulle par bulle pour les manquantes.
 - Le modèle est configurable. Candidats à comparer au jalon 4 : un modèle Qwen3 de taille adaptée à la VRAM (8 Go par défaut, voir section 8), Gemma, translategemma. Le choix par défaut se fait sur la base de mesures, pas a priori.
 
 ### 5.6 Cache et files
 
-- Cache SQLite, clé = sha1(image_url) + target_lang + model + PROMPT_VERSION. Le résultat OCR est mis en cache séparément (clé sha1(image_url)) pour pouvoir changer de modèle ou de langue sans refaire l'OCR.
-- Deux files asyncio à priorité (OCR, traduction). `visible` passe avant `prefetch`. Les requêtes identiques en cours sont fusionnées.
+- Cache SQLite (dossier de cache `platformdirs`, ou `[cache] path`), clé = sha1(image_url) + target_lang + model + PROMPT_VERSION. Le résultat OCR est mis en cache séparément pour pouvoir changer de modèle ou de langue sans refaire l'OCR ; sa clé couvre l'URL, les URL des voisines et une empreinte des réglages OCR et de regroupement (changer de modèle OCR ou de seuil invalide le cache). Une traduction en échec n'est pas mise en cache.
+- Deux files asyncio à priorité (OCR, traduction), chacune traitée par un seul worker. `visible` passe avant `prefetch` ; une demande `visible` fait passer devant une tâche déjà en file en `prefetch`. Les requêtes identiques en cours sont fusionnées, de même que les téléchargements d'images (une image sert aussi de voisine aux deux images adjacentes ; les 64 dernières sont gardées en mémoire).
 
 ### 5.7 Configuration (`config.toml`)
 
-Port, jeton, URL Ollama, modèle, langue cible par défaut, appareil OCR (`auto`/`gpu`/`cpu`), modèles OCR, seuils OCR et regroupement, taille des tranches, allowlist d'hôtes, chemin du cache, niveau de log.
+Port, jeton, URL Ollama, modèle, `keep_alive` et délai d'Ollama, taille du contexte, température, langue cible par défaut, appareil OCR (`auto`/`gpu`/`cpu`), modèles OCR, seuils OCR et regroupement, taille des tranches, allowlist d'hôtes, chemin du cache, niveau de log.
 
-Emplacement : dossier utilisateur donné par `platformdirs` (`%LOCALAPPDATA%\phylactere` sous Windows, `~/.config/phylactere` sous Linux), créé au premier lancement avec **seulement le jeton** : les autres valeurs viennent de `config.example.toml`, et l'utilisateur n'y écrit que celles qu'il change. (Une copie complète de l'exemple, comme au jalon 1, figeait les valeurs par défaut : un nouveau défaut, comme `device = "auto"`, n'atteignait plus les installations existantes.) La variable d'environnement `PHYLACTERE_CONFIG_DIR` permet de déplacer ce dossier (tests, CI).
+Emplacement : dossier utilisateur donné par `platformdirs` (`%LOCALAPPDATA%\phylactere` sous Windows, `~/.config/phylactere` sous Linux), créé au premier lancement avec **seulement le jeton** : les autres valeurs viennent de `config.example.toml`, et l'utilisateur n'y écrit que celles qu'il change. (Une copie complète de l'exemple, comme au jalon 1, figeait les valeurs par défaut : un nouveau défaut, comme `device = "auto"`, n'atteignait plus les installations existantes.) Les variables d'environnement `PHYLACTERE_CONFIG_DIR` et `PHYLACTERE_CACHE_DIR` permettent de déplacer les dossiers de configuration et de cache (tests, CI).
 
 Trois niveaux, du moins au plus prioritaire :
 1. `config.example.toml` : valeurs par défaut (une clé absente du fichier utilisateur prend cette valeur) ;
@@ -234,7 +237,7 @@ Chaque jalon se termine par des tests qui passent et une vérification manuelle 
 
 1. **Squelette serveur** : FastAPI, config via platformdirs, jeton, `/health`, `.gitattributes`, `start.sh`, `install.ps1`, `start.ps1`, CI GitHub Actions (Ubuntu + Windows) verte. Critère : `/health` répond sur Ubuntu, puis sur le PC Windows après `install.ps1` et `start.ps1`.
 2. **OCR** : fetch avec allowlist, PaddleOCR coréen, découpage en tranches, regroupement en bulles. Route de debug `POST /debug/ocr` qui renvoie une image PNG avec les boîtes dessinées. Critère : les bulles des images de `samples/` sont correctement encadrées.
-3. **Traduction** : client Ollama, schéma JSON, contexte, glossaire, cache. Critère : `POST /translate` renvoie des traductions complètes pour toutes les images de `samples/`.
+3. **Traduction** : client Ollama, schéma JSON, contexte, glossaire, cache, files à priorité, lecture des bulles coupées entre deux images. Critère : `POST /translate` renvoie des traductions complètes pour toutes les images de `samples/` (`scripts/translate_samples.py`). Modèle par défaut provisoire : `qwen3:4b` (tient dans 8 Go avec l'OCR ; `qwen3:1.7b` romanise le coréen au lieu de le traduire).
 4. **Choix du modèle** (sur le PC Windows) : `bench.py`, comparaison de 2 ou 3 modèles sur vitesse et qualité (relecture humaine), choix du défaut documenté dans le README.
 5. **Extension** : adaptation de la v1, popup, gestion serveur arrêté, priorités. Critère : lecture d'un épisode complet dans Chrome puis Firefox.
 6. **Finition** : autostart, README complet, dépannage, nettoyage du cache par série.

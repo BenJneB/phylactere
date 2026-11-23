@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from phylactere import __version__
-from phylactere.config import load_settings
+from phylactere.config import default_settings, load_settings
 from phylactere.main import TOKEN_HEADER, create_app
 from tests.helpers import FakeDetector, line
 
@@ -53,7 +53,7 @@ def test_health_without_token(client):
         "ok": True,
         "ocr": "ready",
         "ollama": "ok",
-        "model": "qwen3:8b",
+        "model": default_settings().ollama.model,
         "device": "cpu",
         "version": __version__,
     }

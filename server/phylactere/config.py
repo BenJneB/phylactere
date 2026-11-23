@@ -18,8 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 APP_NAME = "phylactere"
 ENV_CONFIG = "PHYLACTERE_CONFIG"
-# Permet de déplacer le dossier de config (tests, CI) sans toucher au vrai dossier utilisateur.
+# Permettent de déplacer les dossiers de config et de cache (tests, CI) sans toucher aux
+# vrais dossiers de l'utilisateur.
 ENV_CONFIG_DIR = "PHYLACTERE_CONFIG_DIR"
+ENV_CACHE_DIR = "PHYLACTERE_CACHE_DIR"
 EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "config.example.toml"
 
 
@@ -40,10 +42,14 @@ class ServerConfig(_Section):
 class OllamaConfig(_Section):
     url: str
     model: str
+    keep_alive: str
+    timeout_s: float = Field(gt=0)
 
 
 class TranslationConfig(_Section):
     target_lang: str
+    context_size: int = Field(ge=0)
+    temperature: float = Field(ge=0, le=2)
 
 
 class OcrConfig(_Section):
@@ -55,6 +61,7 @@ class OcrConfig(_Section):
     slice_overlap: int = Field(ge=0)
     dedup_overlap: float = Field(gt=0, le=1)
     edge_margin: int = Field(ge=0)
+    neighbor_margin: int = Field(ge=0)
 
     @field_validator("recognition_model")
     @classmethod
@@ -82,17 +89,27 @@ class FetchConfig(_Section):
     timeout_s: float = Field(gt=0)
 
 
+class CacheConfig(_Section):
+    path: str
+
+    def resolved_path(self) -> Path:
+        return Path(self.path) if self.path else cache_dir() / "cache.sqlite3"
+
+
 class Settings(_Section):
     server: ServerConfig
     ollama: OllamaConfig
     translation: TranslationConfig
     ocr: OcrConfig
     grouping: GroupingConfig
+    cache: CacheConfig
     fetch: FetchConfig
 
 
 def cache_dir() -> Path:
-    """Dossier de cache (modèles OCR, puis cache SQLite au jalon 3)."""
+    """Dossier de cache (modèles OCR, cache SQLite)."""
+    if custom := os.environ.get(ENV_CACHE_DIR):
+        return Path(custom)
     return Path(platformdirs.user_cache_dir(APP_NAME, appauthor=False))
 
 

@@ -26,11 +26,14 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 
 from phylactere import __version__
+from phylactere.cache import Cache, GlossaryEntry
 from phylactere.config import Settings, load_settings
 from phylactere.debug import render_debug
 from phylactere.fetch import FetchError, decode_image, fetch_bytes
 from phylactere.ocr import OcrEngine, OcrUnavailable
+from phylactere.pipeline import Pipeline, TranslateRequest, TranslateResponse
 from phylactere.schemas import OcrResult
+from phylactere.translate import OllamaTranslator, TranslationError
 
 TOKEN_HEADER = "X-Phylactere-Token"
 # Origines des extensions : chrome-extension://<id> (Chrome) et moz-extension://<uuid> (Firefox).
@@ -90,9 +93,17 @@ def create_app(
         ):
             app.state.ollama = ollama
             app.state.images = images
+            cache = Cache(settings.cache.resolved_path())
+            translator = OllamaTranslator(ollama, settings.ollama, settings.translation)
+            pipeline = Pipeline(settings, images, engine, translator, cache)
+            pipeline.start()
+            app.state.cache = cache
+            app.state.pipeline = pipeline
             try:
                 yield
             finally:
+                await pipeline.stop()
+                cache.close()
                 engine.close()
 
     app = FastAPI(title="Phylactère", version=__version__, lifespan=lifespan)
@@ -136,17 +147,51 @@ def create_app(
             ) from exc
         return response.json()
 
+    @protected.post("/translate")
+    async def translate(request: Request, body: TranslateRequest) -> TranslateResponse:
+        """OCR et traduction des bulles d'une image de l'épisode."""
+        try:
+            return await request.app.state.pipeline.translate(body)
+        except FetchError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        except OcrUnavailable as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, str(exc), headers={"Retry-After": "5"}
+            ) from exc
+        except TranslationError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+
+    @protected.get("/glossary/{series_id}")
+    async def get_glossary(request: Request, series_id: str) -> list[GlossaryEntry]:
+        return await request.app.state.cache.get_glossary(series_id)
+
+    @protected.put("/glossary/{series_id}")
+    async def put_glossary(
+        request: Request, series_id: str, entries: list[GlossaryEntry]
+    ) -> list[GlossaryEntry]:
+        """Remplace le glossaire ; les traductions en cache de la série sont effacées."""
+        await request.app.state.cache.put_glossary(series_id, entries)
+        return entries
+
+    @protected.delete("/cache")
+    async def clear_cache(request: Request, series_id: str | None = None) -> dict:
+        removed = await request.app.state.cache.clear(series_id)
+        return {"removed": removed}
+
     @protected.post("/debug/ocr", response_model=None)
     async def debug_ocr(
         request: Request,
         image_url: Annotated[str | None, Form()] = None,
         file: Annotated[UploadFile | None, File()] = None,
+        prev_image_url: Annotated[str | None, Form()] = None,
+        next_image_url: Annotated[str | None, Form()] = None,
         output: Annotated[Literal["png", "json"], Query(alias="format")] = "png",
     ) -> Response | OcrResult:
-        """OCR d'une image (URL autorisée ou fichier envoyé).
+        """OCR d'une image (URL autorisée ou fichier envoyé), sans cache.
 
-        Renvoie un PNG annoté (lignes en rouge, bulles en vert, bulles au bord en orange),
-        ou le résultat brut avec ``?format=json``.
+        ``prev_image_url`` / ``next_image_url`` : images voisines, pour lire les bulles
+        coupées entre deux images. Renvoie un PNG annoté (lignes en rouge, bulles en vert,
+        bulles au bord en orange), ou le résultat brut avec ``?format=json``.
         """
         if (image_url is None) == (file is None):
             raise HTTPException(
@@ -160,11 +205,18 @@ def create_app(
                 if len(data) > settings.fetch.max_bytes:
                     raise FetchError("Fichier trop volumineux.", 413)
             image = decode_image(data)
+            neighbors = []
+            for url in (prev_image_url, next_image_url):
+                neighbor = None
+                if url:
+                    raw = await fetch_bytes(request.app.state.images, url, settings.fetch)
+                    neighbor = decode_image(raw)
+                neighbors.append(neighbor)
         except FetchError as exc:
             raise HTTPException(exc.status_code, str(exc)) from exc
 
         try:
-            result = await request.app.state.ocr.recognize(image)
+            result = await request.app.state.ocr.recognize(image, *neighbors)
         except OcrUnavailable as exc:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, str(exc), headers={"Retry-After": "5"}

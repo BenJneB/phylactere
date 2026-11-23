@@ -7,8 +7,9 @@
 log_level = "debug"
 
 [ollama]
-# Petit modèle, suffisant pour développer sans GPU.
-model = "qwen3:1.7b"
+# Le plus petit modèle qui traduise correctement : qwen3:1.7b romanise le coréen au lieu
+# de le traduire. Environ 18 s par image sur CPU. Installation : ollama pull qwen3:4b
+model = "qwen3:4b"
 
 [ocr]
 device = "cpu"
