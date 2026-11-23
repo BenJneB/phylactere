@@ -13,6 +13,7 @@ manquantes, puis une requête par bulle.
 
 import json
 import logging
+from collections.abc import Callable
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -167,14 +168,33 @@ def user_prompt(
     return "\n\n".join(parts)
 
 
+def ollama_stats(data: dict) -> dict:
+    """Statistiques d'une réponse Ollama (durées en nanosecondes converties en ms).
+
+    eval = génération de la réponse ; prompt_eval = lecture du prompt.
+    """
+    ms = lambda key: (data.get(key) or 0) / 1e6  # noqa: E731
+    return {
+        "eval_count": data.get("eval_count") or 0,
+        "eval_ms": ms("eval_duration"),
+        "prompt_eval_count": data.get("prompt_eval_count") or 0,
+        "prompt_eval_ms": ms("prompt_eval_duration"),
+        "total_ms": ms("total_duration"),
+    }
+
+
 class OllamaTranslator:
     def __init__(
         self,
         client: httpx.AsyncClient,
         ollama_cfg: OllamaConfig,
         translation_cfg: TranslationConfig,
+        on_stats: Callable[[dict], None] | None = None,
     ) -> None:
+        """``on_stats`` (facultatif, banc d'essai) reçoit les statistiques d'Ollama pour
+        chaque requête : jetons générés et lus, et durées correspondantes."""
         self._client = client
+        self._on_stats = on_stats
         self._ollama = ollama_cfg
         self._cfg = translation_cfg
         # Qwen3 « réfléchit » par défaut avant de répondre (10 fois plus lent) : on le
@@ -246,9 +266,13 @@ class OllamaTranslator:
                 f"Ollama a répondu {response.status_code} : {response.text[:300]}", 502
             )
         try:
-            return response.json()["message"]["content"]
+            data = response.json()
+            content = data["message"]["content"]
         except (ValueError, KeyError, TypeError) as exc:
             raise _InvalidResponse("réponse Ollama sans message") from exc
+        if self._on_stats is not None:
+            self._on_stats(ollama_stats(data))
+        return content
 
     async def _request(
         self,
