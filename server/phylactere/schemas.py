@@ -100,3 +100,6 @@ class ImageRequest(BaseModel):
     # images, et entrent dans la clé du cache OCR.
     prev_image_url: str | None = None
     next_image_url: str | None = None
+    # Nombre d'images de l'épisode (jalon 17) : retenu par le serveur pour savoir si un
+    # épisode a été lu en entier (résumé) et exporter sans relire la page de Naver.
+    image_count: int | None = Field(default=None, ge=1, le=2000)

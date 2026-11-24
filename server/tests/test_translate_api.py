@@ -1,10 +1,13 @@
 """POST /translate, /glossary et /cache de bout en bout (OCR, images et Ollama simulés)."""
 
+import asyncio
 import json
+from io import BytesIO
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pypdf import PdfReader
 
 from phylactere import pipeline
 from phylactere.cache import TranslationResult
@@ -516,3 +519,56 @@ def test_correction_refuses_foreign_url_and_missing_token(client):
     assert correct(client).status_code == 401
     target = request(box=SECOND_BOX, original="가자")
     assert client.request("DELETE", "/correction", json=target).status_code == 401
+
+
+def test_translate_keeps_image_url_and_image_count(client):
+    """Jalon 17 : l'URL de l'image et le nombre d'images de l'épisode restent en cache."""
+    client.post("/translate", json=request(0, image_count=12))
+    client.post("/translate", json=request(1))  # sans nombre : le précédent reste
+
+    cache = client.app.state.cache
+    images = asyncio.run(cache.episode_images("729047", "66", "fr", "m", pipeline.PROMPT_ID))
+    assert {i: image.image_url for i, image in images.items()} == {
+        0: f"{BASE}0.jpg",
+        1: f"{BASE}1.jpg",
+    }
+    assert cache.image_count("729047", "66") == 12
+
+
+# --- Jalon 17 : POST /export (bouton du popup) ---
+
+
+def export_body(**extra):
+    return {"series_id": "729047", "episode_id": "66", **extra}
+
+
+def test_export_returns_the_pdf(client, world):
+    for index in (0, 1):
+        client.post("/translate", json=request(index, image_count=2))
+    world.image_requests.clear()
+
+    response = client.post("/export", json=export_body())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"] == 'attachment; filename="729047-66-fr.pdf"'
+    assert response.headers["x-phylactere-missing"] == "0"
+    pages = PdfReader(BytesIO(response.content)).pages
+    assert len(pages) == 2
+    # Bulles en vrai texte (le hangul simulé n'est pas dans DejaVu : « FR: » seul).
+    assert pages[0].extract_text().split() == ["FR:", "FR:"]
+    # URL et nombre d'images pris dans le cache : pas de page de Naver.
+    assert not any("comic.naver.com" in url for url in world.image_requests)
+
+
+def test_export_without_translation_is_404(client):
+    response = client.post("/export", json=export_body(episode_id="65"))
+
+    assert response.status_code == 404
+    assert "lisez-le d'abord" in response.json()["detail"]
+
+
+def test_export_checks_ids_and_token(client):
+    assert client.post("/export", json=export_body(series_id="1&x=2")).status_code == 422
+    response = client.post("/export", json=export_body(), headers={TOKEN_HEADER: "faux"})
+    assert response.status_code == 401

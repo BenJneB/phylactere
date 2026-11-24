@@ -1,8 +1,9 @@
 """Export d'un épisode traduit en PDF (jalon 16), pour le relire hors ligne.
 
 Usage strictement personnel : le PDF n'est jamais publié ni partagé. Rien n'est calculé :
-les traductions viennent du cache (corrections comprises) et les images sont
-retéléchargées. Le serveur peut tourner ou non. Une image sans traduction en cache est
+les traductions, l'URL et le nombre des images viennent du cache (corrections comprises),
+les images sont retéléchargées ; la page de l'épisode n'est lue que si le cache est
+incomplet. Le serveur peut tourner ou non. Une image sans traduction en cache est
 exportée sans bulles (avertissement). Depuis server/ :
 
     uv run python ../scripts/export.py 729047 66            # langue et modèle de la config
@@ -55,6 +56,8 @@ def main() -> None:
     except ExportError as exc:
         sys.exit(f"Export impossible : {exc}")
 
+    if report.page_read:
+        print("URL des images lues dans la page de Naver (cache incomplet).", file=sys.stderr)
     if report.missing:
         numbers = ", ".join(str(i + 1) for i in report.missing)
         print(

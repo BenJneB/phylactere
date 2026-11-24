@@ -14,6 +14,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     retranslate: () => retranslate(msg.request),
     correct: () => correct(msg.request),
     summary: () => summary(msg.request),
+    export: () => exportPdf(msg.seriesId, msg.episodeId),
     report: () => report(msg.request),
     "report-cancel": () => call(`/report/${encodeURIComponent(msg.id)}`, { method: "DELETE" }),
     health: () => health(),
@@ -70,6 +71,43 @@ async function correct(request) {
   const erase = !text.trim();
   const body = withLangModel(erase ? target : { ...target, text, translated }, s);
   return call("/correction", { method: erase ? "DELETE" : "PUT", body, s });
+}
+
+// Export PDF de l'épisode (bouton du popup, jalon 17) : le serveur rend le PDF (traductions
+// du cache, images retéléchargées), puis il est enregistré dans Téléchargements/phylactere.
+// Le popup peut se fermer pendant ce temps : le téléchargement part quand même.
+async function exportPdf(seriesId, episodeId) {
+  const s = await settings();
+  const body = withLangModel({ series_id: seriesId, episode_id: episodeId }, s);
+  const res = await call("/export", {
+    method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", binary: true, s
+  });
+  if (!res.ok) return res;
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] || `${seriesId}-${episodeId}.pdf`;
+  const url = fileUrl(res.data, "application/pdf");
+  try {
+    await chrome.downloads.download({ url, filename: `phylactere/${filename}`, conflictAction: "overwrite" });
+  } catch (e) {
+    return failure("error", "Téléchargement impossible : " + (e?.message || e));
+  } finally {
+    // Le téléchargement a copié les données : l'URL d'objet peut être libérée.
+    if (url.startsWith("blob:")) setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+  return { ok: true, data: { filename, missing: Number(res.headers.get("X-Phylactere-Missing")) || 0 } };
+}
+
+// URL à télécharger : URL d'objet (blob:) là où elle existe (page d'arrière-plan de
+// Firefox, qui refuse les URL data: dans downloads), sinon URL data: (service worker de
+// Chrome, sans URL.createObjectURL).
+function fileUrl(buffer, type) {
+  if (typeof URL.createObjectURL === "function") return URL.createObjectURL(new Blob([buffer], { type }));
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return `data:${type};base64,${btoa(binary)}`;
 }
 
 function health() {

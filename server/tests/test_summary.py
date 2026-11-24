@@ -79,9 +79,9 @@ def translate(client, *indexes, **extra):
 
 def test_summary_lists_bubbles_in_reading_order(client, world):
     # Images traduites dans le désordre : le prompt suit l'ordre de l'épisode.
-    translate(client, 2, 0, 1)
+    translate(client, 2, 0, 1, image_count=3)
 
-    response = client.post("/summary", json=summary(image_count=3))
+    response = client.post("/summary", json=summary())
 
     assert response.status_code == 200
     body = response.json()
@@ -124,10 +124,10 @@ def test_summary_without_bubbles_is_404(client, world):
 
 
 def test_episode_read_in_part(client, world):
-    translate(client, 0, 1)
+    # Moins d'images en cache que dans l'épisode (nombre envoyé avec chaque image).
+    translate(client, 0, 1, image_count=5)
 
-    # Moins d'images en cache que dans l'épisode.
-    body = client.post("/summary", json=summary(image_count=5)).json()
+    body = client.post("/summary", json=summary()).json()
 
     assert body["partial"] is True
     assert "n'a lu qu'une partie" in world.summary_prompt()
@@ -143,12 +143,12 @@ def test_gap_in_images_means_read_in_part(client, world):
 
 
 def test_summary_redone_when_bubbles_change(client, world):
-    translate(client, 0)
-    client.post("/summary", json=summary(image_count=2))  # lu en partie
+    translate(client, 0, image_count=2)
+    client.post("/summary", json=summary())  # lu en partie
 
     # Fin de l'épisode lue ensuite : nouvelles bulles, résumé refait (et complet).
-    translate(client, 1)
-    body = client.post("/summary", json=summary(image_count=2)).json()
+    translate(client, 1, image_count=2)
+    body = client.post("/summary", json=summary()).json()
 
     assert body["cached"] is False
     assert body["partial"] is False
@@ -156,16 +156,18 @@ def test_summary_redone_when_bubbles_change(client, world):
     assert len(world.summary_bodies) == 2
 
 
-def test_summary_without_image_count_keeps_stored_summary(client, world):
+def test_image_count_learned_later_redoes_summary(client, world):
+    # Épisode lu avant le jalon 17 : nombre d'images inconnu, résumé complet.
     translate(client, 0, 1)
-    client.post("/summary", json=summary(image_count=4))
+    assert client.post("/summary", json=summary()).json()["partial"] is False
 
-    # À l'ouverture de l'épisode suivant, l'extension peut ne pas connaître le nombre
-    # d'images : rien ne contredit le résumé gardé.
+    # Nombre d'images appris ensuite (image servie par le cache) : épisode lu en partie.
+    translate(client, 0, image_count=4)
     body = client.post("/summary", json=summary()).json()
 
-    assert body["cached"] is True
+    assert body["cached"] is False
     assert body["partial"] is True
+    assert client.post("/summary", json=summary()).json()["cached"] is True
 
 
 def test_corrections_are_summarized(client, world):

@@ -22,6 +22,7 @@ from phylactere.cache import (
 )
 from phylactere.config import Settings, reports_dir
 from phylactere.errors import ServiceError
+from phylactere.export import ExportReport, render_episode
 from phylactere.fetch import FetchError, check_url, decode_image, fetch_bytes
 from phylactere.glossary import Suggestion, suggest_entries
 from phylactere.ocr import OcrEngine
@@ -143,12 +144,19 @@ class SummaryRequest(BaseModel):
     episode_id: str = Field(min_length=1, max_length=64)
     target_lang: str | None = Field(default=None, min_length=2, max_length=10)
     model: str | None = Field(default=None, min_length=1, max_length=100)
-    # Nombre d'images de l'épisode, quand l'extension le connaît : moins d'images traduites
-    # en cache = épisode lu en partie.
-    image_count: int | None = Field(default=None, ge=1, le=2000)
     # « background » : épisode courant, résumé d'avance pour l'ouverture du suivant ;
     # « prefetch » : résumé de l'épisode précédent qui manque à l'ouverture.
     priority: Literal["prefetch", "background"] = "prefetch"
+
+
+class ExportRequest(BaseModel):
+    """Export PDF d'un épisode (bouton du popup, jalon 17)."""
+
+    # Chiffres seulement : ils entrent dans l'URL de la page de l'épisode.
+    series_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    episode_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    target_lang: str | None = Field(default=None, min_length=2, max_length=10)
+    model: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class SummaryResponse(BaseModel):
@@ -357,6 +365,12 @@ class Pipeline:
     def _translation_key(image_url: str, lang: str, model: str) -> str:
         return translation_key(image_url, lang, model, PROMPT_ID)
 
+    async def _note_image_count(self, request: ImageRequest) -> None:
+        """Retient le nombre d'images de l'épisode envoyé par l'extension (jalon 17)."""
+        count = request.image_count
+        if count and self._cache.image_count(request.series_id, request.episode_id) != count:
+            await self._cache.put_image_count(request.series_id, request.episode_id, count)
+
     async def translate(self, request: TranslateRequest) -> TranslateResponse:
         lang, model = self._check(request)
         key = self._translation_key(request.image_url, lang, model)
@@ -366,13 +380,13 @@ class Pipeline:
         # Une retraduction ne doit pas être fusionnée avec une traduction ordinaire en
         # cours de la même image : elle en attendrait le résultat, sans rien retraduire.
         task_key = f"force:{key}:{translator_model}" if request.force else key
+        await self._note_image_count(request)
 
         if not request.force:
-            cached = await self._cache.get_translation(key)
+            cached = await self._cache.get_translation(key)  # corrections appliquées
             if cached is not None:
                 self._served += 1
                 self._served_cached += 1
-                cached = await self._cache.corrected(request.image_url, lang, cached)
                 return TranslateResponse(**dict(cached), cached=True, timings_ms=timings)
 
         ocr = await self._ocr_result(request, request.priority, timings)
@@ -423,6 +437,7 @@ class Pipeline:
             model,
             result,
             glossary_version,
+            image_url=request.image_url,
         )
         logger.info(
             "Image %s/%s #%d%s : %d bulle(s), %s",
@@ -458,9 +473,8 @@ class Pipeline:
                 "rechargez la page.",
                 404,
             )
-        # Corrections appliquées : une bulle corrigée n'est pas retraduite, et les autres
-        # bulles passent au modèle sous leur forme corrigée.
-        cached = await self._cache.corrected(request.image_url, lang, cached)
+        # Corrections appliquées (get_translation) : une bulle corrigée n'est pas retraduite,
+        # et les autres bulles passent au modèle sous leur forme corrigée.
         index = match_box([block.box for block in cached.blocks], request.box)
         if index is None:
             raise ServiceError("Bulle introuvable dans la traduction en cache.", 404)
@@ -560,11 +574,14 @@ class Pipeline:
         """
         lang, model = self._lang_model(request.target_lang, request.model)
         images = await self._cache.episode_bubbles(
-            request.series_id, request.episode_id, lang, model
+            request.series_id, request.episode_id, lang, model, PROMPT_ID
         )
         bubbles = sum(len(texts) for _, texts in images)
-        # Images manquantes : un trou dans les index, ou moins d'images que l'épisode.
-        expected = max(request.image_count or 0, images[-1][0] + 1 if images else 0)
+        # Images manquantes : un trou dans les index, ou moins d'images que l'épisode (nombre
+        # envoyé par l'extension avec chaque image, inconnu pour un épisode lu avant le
+        # jalon 17).
+        count = self._cache.image_count(request.series_id, request.episode_id) or 0
+        expected = max(count, images[-1][0] + 1 if images else 0)
         partial = len(images) < expected
         source = sha1(json.dumps(images, ensure_ascii=False))
 
@@ -586,8 +603,7 @@ class Pipeline:
             or (
                 stored.version == SUMMARY_VERSION
                 and stored.source == source
-                # Sans nombre d'images, rien ne contredit la mention « lu en partie ».
-                and (request.image_count is None or stored.partial == partial)
+                and stored.partial == partial
             )
         ):
             return response(stored, True)
@@ -631,6 +647,32 @@ class Pipeline:
         key = f"summary:{request.series_id}:{request.episode_id}:{lang}:{model}:{source}"
         stored = await self.translation_queue.run(key, request.priority, compute)
         return response(stored, False)
+
+    # --- Export PDF (jalon 17) ---
+
+    async def export(self, request: ExportRequest) -> tuple[bytes, ExportReport]:
+        """PDF de l'épisode, comme scripts/export.py, avec les images gardées en mémoire."""
+        lang, model = self._lang_model(request.target_lang, request.model)
+        start = time.perf_counter()
+        pdf, report = await render_episode(
+            self._cache,
+            self._images,
+            self.download,
+            request.series_id,
+            request.episode_id,
+            lang,
+            model,
+        )
+        logger.info(
+            "Export PDF %s/%s : %d image(s), %d sans bulles, %d Mo, %d ms.",
+            request.series_id,
+            request.episode_id,
+            report.images,
+            len(report.missing),
+            len(pdf) // 1_000_000,
+            _ms(start),
+        )
+        return pdf, report
 
     # --- Propositions de glossaire ---
 

@@ -88,13 +88,13 @@ Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la pro
 - popup › **Vider le cache de cette série** (sur une page Naver) ou **Vider tout le cache** : les traductions seront refaites à la prochaine lecture (recharger la page). Les glossaires, les corrections et les résumés sont conservés. Le bouton affiche la taille du cache ;
 - popup › **Statistiques** (section repliable) : taille du cache, images servies depuis le lancement du serveur et part venue du cache, temps moyens et maximaux de téléchargement, d'OCR et de traduction, tâches en attente.
 
-**Exporter un épisode en PDF**, pour le relire hors ligne (usage personnel uniquement : le PDF ne se partage pas). Depuis `server\`, serveur lancé ou non :
+**Exporter un épisode en PDF**, pour le relire hors ligne (usage personnel uniquement : le PDF ne se partage pas). Sur la page de l'épisode : popup › **Exporter l'épisode en PDF**. Le bouton reste grisé tant que tout l'épisode n'est pas traduit (avancement affiché dessous) ; le PDF arrive dans `Téléchargements\phylactere\`. Au premier lancement de cette version, le navigateur demande la nouvelle autorisation « Gérer vos téléchargements ». Sans navigateur, depuis `server\`, serveur lancé ou non :
 
 ```powershell
 uv run python ..\scripts\export.py 729047 66 --open   # titleId et no, lus dans l'URL de l'épisode
 ```
 
-Le PDF (une page par image, bulles en vrai texte : net à tous les zooms et recherchable) est écrit dans `%LOCALAPPDATA%\phylactere\exports\`. Rien n'est recalculé : seules les images traduites en cache ont leurs bulles (corrections comprises), les autres sont exportées telles quelles, avec un avertissement. `--lang` et `--model` choisissent la langue et le modèle préféré (défaut : ceux de la configuration ; une image traduite seulement par un autre modèle prend sa traduction).
+Le PDF (une page par image, bulles en vrai texte : net à tous les zooms et recherchable) est écrit dans `%LOCALAPPDATA%\phylactere\exports\`. Rien n'est recalculé : seules les images traduites en cache ont leurs bulles (corrections comprises), les autres sont exportées telles quelles, avec un avertissement. Pour un épisode lu avec la version actuelle, l'export n'a plus besoin de la page de Naver (seules les images sont retéléchargées) ; sinon, la page de l'épisode est relue pour trouver les images. `--lang` et `--model` choisissent la langue et le modèle préféré (défaut : ceux de la configuration ; une image traduite seulement par un autre modèle prend sa traduction).
 
 Le cache est limité à 500 Mo (`max_mb` de la section `[cache]` de `config.toml`, 0 = sans limite) : au-delà, les images lues le moins récemment sont oubliées (elles seront refaites si on les relit). Les glossaires et les corrections ne sont jamais oubliés. Au premier lancement de cette version, un cache existant est réécrit une fois pour pouvoir rétrécir : le démarrage peut prendre quelques secondes de plus.
 

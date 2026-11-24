@@ -75,8 +75,17 @@ def block(text: str, y: int = 100, h: int = 40, **extra) -> TranslatedBlock:
     )
 
 
-def store(path, translations: dict[int, list[TranslatedBlock]], model="m", corrections=()):
-    """Écrit des traductions (index → bulles) et des corrections dans un cache."""
+def store(
+    path,
+    translations: dict[int, list[TranslatedBlock]],
+    model="m",
+    corrections=(),
+    with_urls=False,
+    image_count=None,
+):
+    """Écrit des traductions (index → bulles) et des corrections dans un cache.
+    ``with_urls`` / ``image_count`` : comme le serveur depuis le jalon 17 (sinon, cache
+    d'avant : l'export relit la page de Naver)."""
 
     async def write():
         cache = Cache(path)
@@ -84,7 +93,18 @@ def store(path, translations: dict[int, list[TranslatedBlock]], model="m", corre
             url = image_url(index)
             result = TranslationResult(blocks=blocks, image_size=ImageSize(w=W, h=H))
             key = Pipeline._translation_key(url, "fr", model)
-            await cache.put_translation(key, SERIES, EPISODE, index, "fr", model, result)
+            await cache.put_translation(
+                key,
+                SERIES,
+                EPISODE,
+                index,
+                "fr",
+                model,
+                result,
+                image_url=url if with_urls else None,
+            )
+        if image_count:
+            await cache.put_image_count(SERIES, EPISODE, image_count)
         for index, correction in corrections:
             await cache.put_correction(image_url(index), SERIES, EPISODE, index, "fr", correction)
         cache.close()
@@ -346,3 +366,35 @@ def test_failed_download_is_an_export_error(cache_path):
 
     with pytest.raises(ExportError, match="img_2"):
         export(cache_path, network)
+
+
+# --- Jalon 17 : URL et nombre d'images pris dans le cache ---
+
+
+def naver_pages(network) -> list[str]:
+    return [str(r.url) for r in network.requests if r.url.host == "comic.naver.com"]
+
+
+def test_export_from_cache_without_reading_naver(cache_path):
+    store(cache_path, {0: [block("Un")], 1: [], 2: [block("Trois")]}, with_urls=True, image_count=3)
+    network = Network()
+
+    report = export(cache_path, network)
+
+    assert naver_pages(network) == []
+    assert report.page_read is False
+    assert (report.images, report.missing) == (3, [])
+    assert "Trois" in page_texts(report.path)[2]
+
+
+def test_page_read_when_an_image_was_never_translated(cache_path):
+    # Image 1 jamais traduite : son URL n'est pas dans le cache.
+    store(cache_path, {0: [block("Un")], 2: [block("Trois")]}, with_urls=True, image_count=3)
+    network = Network()
+
+    report = export(cache_path, network)
+
+    assert naver_pages(network) == [PAGE]
+    assert report.page_read is True
+    assert report.missing == [1]
+    assert "Trois" in page_texts(report.path)[2]
