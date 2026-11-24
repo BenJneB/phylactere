@@ -9,31 +9,26 @@ regroupement.
 """
 
 import json
+import re
 import secrets
-import time
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from phylactere.schemas import Box, Bubble, OcrResult
+from phylactere.ocr import stack_images
+from phylactere.schemas import Box, Bubble, ImageRequest, OcrResult
 
 # Marge autour de la bulle dans la découpe (px de l'image d'origine) : un peu de dessin
 # autour aide à juger le regroupement et la lecture.
 CROP_MARGIN = 24
+# Identifiant d'un signalement (voir write_report) : contrôlé avant toute suppression, pour
+# ne jamais toucher un fichier hors du dossier des signalements.
+REPORT_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 
 
-class ReportRequest(BaseModel):
-    image_url: str
-    series_id: str = Field(min_length=1, max_length=64)
-    episode_id: str = Field(min_length=1, max_length=64)
-    index: int = Field(ge=0)
-    target_lang: str | None = Field(default=None, min_length=2, max_length=10)
-    model: str | None = Field(default=None, min_length=1, max_length=100)
-    # Mêmes voisines que pour /translate : elles entrent dans la clé du cache OCR, et la
-    # bulle peut déborder sur l'image suivante.
-    prev_image_url: str | None = None
-    next_image_url: str | None = None
+class ReportRequest(ImageRequest):
     # Bulle telle que l'extension l'affiche.
     box: Box
     original: str = Field(max_length=5000)
@@ -60,16 +55,13 @@ def crop_bubble(
     image: Image.Image, following: Image.Image | None, box: Box, margin: int = CROP_MARGIN
 ) -> Image.Image:
     """Découpe de la bulle avec une marge ; une bulle coupée entre deux images déborde en
-    bas : on prolonge alors l'image par le haut de la suivante (même largeur)."""
+    bas : on prolonge alors l'image par le haut de la suivante (même largeur). En RGB."""
     image = image.convert("RGB")
     width, height = image.size
     bottom = box.bottom + margin
     if bottom > height and following is not None and following.width == width:
         extra = min(bottom - height, following.height)
-        extended = Image.new("RGB", (width, height + extra))
-        extended.paste(image, (0, 0))
-        extended.paste(following.convert("RGB").crop((0, 0, width, extra)), (0, height))
-        image = extended
+        image = stack_images(image, following.crop((0, 0, width, extra)))
     left, top = max(0, box.x - margin), max(0, box.y - margin)
     right, bottom = min(image.width, box.right + margin), min(image.height, bottom)
     if right <= left or bottom <= top:  # boîte hors de l'image : on garde l'image entière
@@ -89,11 +81,15 @@ def write_report(
     """Écrit ``<id>.json`` et ``<id>.png`` ; renvoie l'identifiant du signalement."""
     directory.mkdir(parents=True, exist_ok=True)
     # Horodatage d'abord : les fichiers se trient dans l'ordre des signalements.
-    report_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
-    crop.save(directory / f"{report_id}.png", format="PNG")
+    now = datetime.now().astimezone()
+    report_id = f"{now:%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
+    png = directory / f"{report_id}.png"
+    crop.save(png, format="PNG")
     data = {
         "id": report_id,
-        "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        # isoformat plutôt que strftime("%z") : sous Windows, %z peut donner le nom
+        # localisé du fuseau au lieu du décalage.
+        "created": now.isoformat(timespec="seconds"),
         "image_url": request.image_url,
         "prev_image_url": request.prev_image_url,
         "next_image_url": request.next_image_url,
@@ -116,7 +112,27 @@ def write_report(
         "lines": [line.model_dump() for line in bubble.lines] if bubble else [],
         "crop": f"{report_id}.png",
     }
-    (directory / f"{report_id}.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    try:
+        (directory / f"{report_id}.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except BaseException:
+        # Sans JSON, la découpe n'apparaîtrait dans aucun rapport et ne pourrait pas être
+        # annulée.
+        png.unlink(missing_ok=True)
+        raise
     return report_id
+
+
+def delete_report(directory: Path, report_id: str) -> bool:
+    """Supprime ``<id>.json`` et ``<id>.png`` ; False si l'identifiant est invalide ou si
+    le signalement n'existe pas."""
+    if not REPORT_ID.fullmatch(report_id):
+        return False
+    found = False
+    for suffix in (".json", ".png"):
+        path = directory / f"{report_id}{suffix}"
+        if path.is_file():
+            path.unlink()
+            found = True
+    return found

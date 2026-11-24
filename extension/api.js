@@ -15,10 +15,6 @@ const SHORT_TIMEOUT_MS = 4_000;
 // d'erreur plutôt que d'abandonner avant lui.
 const SUGGEST_TIMEOUT_MS = 2_400_000;
 
-async function settings() {
-  return chrome.storage.local.get(DEFAULTS);
-}
-
 function failure(kind, error, extra = {}) {
   return { ok: false, kind, error, ...extra };
 }
@@ -73,13 +69,19 @@ async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, au
   return failure("error", detail);
 }
 
+// Corps de requête complété par la langue cible et le modèle choisis dans le popup
+// (modèle vide : le serveur prend celui de sa configuration).
+function withLangModel(body, s) {
+  const out = { ...body, target_lang: s.targetLang };
+  if (s.model) out.model = s.model;
+  return out;
+}
+
 // Propositions d'entrées : le serveur les calcule après les images en attente (priorité
 // « background »), en une seule requête longue à Ollama.
 async function suggestGlossary(seriesId, episodeId) {
   const s = await settings();
-  const body = { target_lang: s.targetLang };
-  if (s.model) body.model = s.model;
-  if (episodeId) body.episode_id = episodeId;
+  const body = withLangModel(episodeId ? { episode_id: episodeId } : {}, s);
   return call(`/glossary/${encodeURIComponent(seriesId)}/suggest`, {
     method: "POST", body, timeout: SUGGEST_TIMEOUT_MS, onTimeout: "error", s
   });

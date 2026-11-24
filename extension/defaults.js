@@ -1,4 +1,5 @@
-// defaults.js — réglages par défaut, partagés par background.js, content.js et le popup.
+// defaults.js — réglages (valeurs par défaut, lecture), partagés par background.js,
+// content.js, le popup et la page de glossaire.
 // Chargé avant eux : manifeste (content script, page d'arrière-plan Firefox),
 // importScripts (service worker Chrome) et balise <script> du popup.
 const DEFAULTS = {
@@ -15,6 +16,11 @@ const DEFAULTS = {
 
 // Réglages appliqués à chaud par content.js, sans retraduire la page.
 const LIVE_SETTINGS = ["translateMode", "lookahead"];
+
+// Réglages enregistrés, complétés par les valeurs par défaut.
+function settings() {
+  return chrome.storage.local.get(DEFAULTS);
+}
 
 function clampLookahead(value) {
   const n = Math.round(Number(value));

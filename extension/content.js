@@ -22,7 +22,7 @@
   // et la lecture passée à 80 % de ses images.
   const NEXT_EPISODE_PROGRESS = 0.8;
   const NOTICE_MS = 4000; // durée d'un message temporaire du badge
-  const HINT = "Clic ou Alt+T : afficher / masquer les traductions\nAlt+clic sur une bulle : la signaler";
+  const HINT = "Clic ou Alt+T : afficher / masquer les traductions\nAlt+clic sur une bulle : la signaler (ou annuler)";
 
   const entries = new Map(); // url -> entrée (voir track())
   let order = []; // entrées dans l'ordre de l'épisode
@@ -37,6 +37,9 @@
   let translateMode = DEFAULTS.translateMode;
   let lookahead = DEFAULTS.lookahead;
   let lastHref = location.href;
+  // Épisode du HTML chargé par le navigateur : le content script n'est injecté qu'au
+  // chargement d'une page, pas lors d'une navigation sans rechargement.
+  const loadedEpisodeId = currentEpisode()?.episodeId;
   // Préchargement de l'épisode suivant : null (pas encore demandé), puis
   // { state: "loading" | "none" | "ready", episodeId, urls, pending, done, failed }.
   let upcoming = null;
@@ -48,7 +51,7 @@
   badge.className = "phy-badge";
   badge.addEventListener("click", toggleHidden);
 
-  chrome.storage.local.get(DEFAULTS).then((s) => {
+  settings().then((s) => {
     enabled = s.enabled;
     targetLang = s.targetLang;
     translateMode = s.translateMode;
@@ -208,6 +211,33 @@
     updateBadge();
   }
 
+  // Message au script d'arrière-plan, avec un résultat normalisé comme ceux d'api.js :
+  // rejet (extension rechargée entre-temps) → "down", réponse vide → "error".
+  async function ask(msg) {
+    try {
+      return (await chrome.runtime.sendMessage(msg)) ??
+        { ok: false, kind: "error", error: "Réponse vide" };
+    } catch (err) {
+      return { ok: false, kind: "down", error: "Extension indisponible : " + (err?.message || err) };
+    }
+  }
+
+  // Image `i` d'un épisode et ses voisines (`urlAt(j)` : URL de l'image j). Les voisines
+  // entrent dans la clé du cache OCR : traduction, préchargement et signalement doivent
+  // envoyer les mêmes.
+  function imageRequest(urlAt, i, episodeId) {
+    return {
+      image_url: urlAt(i),
+      series_id: episode.seriesId,
+      episode_id: episodeId,
+      index: i,
+      prev_image_url: urlAt(i - 1),
+      next_image_url: urlAt(i + 1)
+    };
+  }
+
+  const orderUrl = (j) => order[j]?.url;
+
   // `counted` : requête qui occupe une place de la file. Une image déjà envoyée en
   // préchargement qui devient visible est renvoyée en « visible » (hors quota) : le serveur
   // fusionne les deux requêtes et fait passer la tâche devant.
@@ -218,24 +248,11 @@
       e.status = "working";
     }
     if (priority === "visible") e.sentVisible = true;
-    const request = {
-      image_url: e.url,
-      series_id: episode.seriesId,
-      episode_id: episode.episodeId,
-      index: e.index,
-      priority,
-      prev_image_url: order[e.index - 1]?.url,
-      next_image_url: order[e.index + 1]?.url
-    };
-    let res;
-    try {
-      res = await chrome.runtime.sendMessage({ type: "translate", request });
-    } catch (err) {
-      res = { ok: false, kind: "down", error: "Extension indisponible : " + (err?.message || err) };
-    }
+    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId), priority };
+    const res = await ask({ type: "translate", request });
     if (gen !== generation) return; // page remise à zéro entre-temps
     if (counted) inFlight--;
-    handle(e, res || { ok: false, kind: "error", error: "Réponse vide" }, counted);
+    handle(e, res, counted);
     pump();
   }
 
@@ -291,14 +308,9 @@
 
   async function checkHealth() {
     const gen = generation;
-    let res;
-    try {
-      res = await chrome.runtime.sendMessage({ type: "health" });
-    } catch {
-      res = null;
-    }
+    const res = await ask({ type: "health" });
     if (gen !== generation || pause?.kind !== "down") return;
-    if (res?.ok) resume();
+    if (res.ok) resume();
     else pauseTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
   }
 
@@ -328,44 +340,69 @@
   // (window.__state__ = { …, nextArticle: { no: '67', charge: false, … } }). Le content
   // script ne voit pas les variables de la page, mais il lit le texte de ses scripts.
   // Épisode payant (charge: true) ou absent (dernier épisode) : pas de préchargement.
-  function nextEpisodeNumber() {
-    for (const script of document.querySelectorAll("script:not([src])")) {
+  function nextEpisodeNumber(doc) {
+    for (const script of doc.querySelectorAll("script:not([src])")) {
       const block = /nextArticle\s*:\s*\{([^}]*)\}/.exec(script.textContent)?.[1];
       if (block === undefined) continue;
       const no = /\bno\s*:\s*['"]?(\d+)/.exec(block)?.[1];
-      // Même numéro que l'épisode affiché : script d'une page déjà quittée (navigation
-      // sans rechargement).
       if (!no || no === episode.episodeId || /\bcharge\s*:\s*true/.test(block)) return null;
       return no;
     }
     return null;
   }
 
+  // Page d'un épisode de la série, téléchargée sans l'ouvrir. Sans les cookies de
+  // l'utilisateur : Naver pourrait sinon compter l'épisode comme lu (historique, reprise de
+  // la lecture). Contrepartie : un épisode réservé aux comptes connectés n'est pas préchargé.
+  async function fetchEpisodePage(episodeId) {
+    const url = new URL(location.href);
+    url.searchParams.set("no", episodeId);
+    url.hash = "";
+    const res = await fetch(url, { credentials: "omit" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { url, doc: new DOMParser().parseFromString(await res.text(), "text/html") };
+  }
+
+  // URL d'image telle que scan() la verra à l'ouverture de l'épisode (URL absolue, image
+  // réelle plutôt qu'image d'attente) : les voisines entrent dans la clé du cache OCR.
+  function pageImageUrl(img, base, ep) {
+    for (const raw of [img.getAttribute("src"), img.dataset.src]) {
+      if (!raw) continue;
+      try {
+        const url = new URL(raw, base).href;
+        if (isEpisodeImage(url, ep)) return url;
+      } catch {
+        // URL invalide : candidate suivante
+      }
+    }
+    return null;
+  }
+
   // Les URL des images d'un épisode sont dans le HTML de sa page (rendu par le serveur de
-  // Naver, #sectionContWide) : on le télécharge sans l'ouvrir, avec les cookies de
-  // l'utilisateur (même origine), puis on applique la même sélection que scan().
+  // Naver, #sectionContWide) : on applique la même sélection que scan().
   async function loadUpcoming() {
     const gen = generation;
-    const episodeId = nextEpisodeNumber();
+    let episodeId = null;
     let urls = [];
-    if (episodeId) {
-      try {
-        const url = new URL(location.href);
-        url.searchParams.set("no", episodeId);
-        url.hash = "";
-        const res = await fetch(url, { credentials: "include" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+    try {
+      // Après une navigation sans rechargement, les scripts de la page sont ceux du premier
+      // épisode chargé : nextArticle est alors relu dans le HTML de l'épisode affiché.
+      const current = episode.episodeId === loadedEpisodeId
+        ? document
+        : (await fetchEpisodePage(episode.episodeId)).doc;
+      episodeId = nextEpisodeNumber(current);
+      if (episodeId) {
+        const { url, doc } = await fetchEpisodePage(episodeId);
         const root = doc.querySelector(VIEWER) || doc;
         const ep = { seriesId: episode.seriesId, episodeId };
         for (const img of root.querySelectorAll("img")) {
-          const src = img.getAttribute("src") || img.dataset.src || "";
-          if (isEpisodeImage(src, ep) && !urls.includes(src)) urls.push(src);
+          const src = pageImageUrl(img, url, ep);
+          if (src && !urls.includes(src)) urls.push(src);
         }
-      } catch (err) {
-        console.warn("[Phylactère] Épisode suivant illisible :", err?.message || err);
-        urls = [];
       }
+    } catch (err) {
+      console.warn("[Phylactère] Épisode suivant illisible :", err?.message || err);
+      urls = [];
     }
     if (gen !== generation) return;
     upcoming = urls.length
@@ -389,26 +426,13 @@
   async function sendUpcomingImage(up, i) {
     const gen = generation;
     inFlight++;
-    const request = {
-      image_url: up.urls[i],
-      series_id: episode.seriesId,
-      episode_id: up.episodeId,
-      index: i,
-      priority: "prefetch",
-      prev_image_url: up.urls[i - 1],
-      next_image_url: up.urls[i + 1]
-    };
-    let res;
-    try {
-      res = await chrome.runtime.sendMessage({ type: "translate", request });
-    } catch (err) {
-      res = { ok: false, kind: "down", error: "Extension indisponible : " + (err?.message || err) };
-    }
+    const request = { ...imageRequest((j) => up.urls[j], i, up.episodeId), priority: "prefetch" };
+    const res = await ask({ type: "translate", request });
     if (gen !== generation) return;
     inFlight--;
-    if (res?.ok) {
+    if (res.ok) {
       up.done++;
-    } else if (["down", "token", "busy"].includes(res?.kind)) {
+    } else if (["down", "token", "busy"].includes(res.kind)) {
       up.pending.unshift(i); // reprise avec la file
       suspend(res);
     } else {
@@ -422,34 +446,47 @@
 
   // Le serveur enregistre la bulle, ses lignes OCR et une découpe de l'image, pour
   // constituer un corpus d'échecs (scripts/reports.py en fait un rapport HTML).
+  // Un second Alt+clic annule le signalement (tant que la page n'a pas été rechargée :
+  // l'identifiant n'est gardé que sur la bulle affichée).
+  function toggleReport(e, b, el) {
+    if (el.dataset.report === "sending") return; // envoi ou annulation en cours
+    if (el.dataset.report === "done") cancelReport(el);
+    else report(e, b, el);
+  }
+
   async function report(e, b, el) {
-    if (el.dataset.report) return; // déjà signalée, ou envoi en cours
     el.dataset.report = "sending";
     const request = {
-      image_url: e.url,
-      series_id: episode.seriesId,
-      episode_id: episode.episodeId,
-      index: e.index,
-      prev_image_url: order[e.index - 1]?.url,
-      next_image_url: order[e.index + 1]?.url,
+      ...imageRequest(orderUrl, e.index, episode.episodeId),
       box: b.box,
       original: b.original,
       translated: b.translated
     };
-    let res;
-    try {
-      res = await chrome.runtime.sendMessage({ type: "report", request });
-    } catch (err) {
-      res = { ok: false, error: "Extension indisponible : " + (err?.message || err) };
-    }
+    const res = await ask({ type: "report", request });
     if (!el.isConnected) return; // page remise à zéro entre-temps
-    if (res?.ok) {
+    if (res.ok) {
       el.dataset.report = "done";
-      showNotice("Bulle signalée", "");
+      el.dataset.reportId = res.data.id;
+      showNotice("Bulle signalée (Alt+clic pour annuler)", "");
     } else {
       delete el.dataset.report;
-      console.warn("[Phylactère] Signalement impossible :", res?.error);
-      showNotice("Signalement impossible : " + (res?.error || "réponse vide"), "error");
+      console.warn("[Phylactère] Signalement impossible :", res.error);
+      showNotice("Signalement impossible : " + res.error, "error");
+    }
+  }
+
+  async function cancelReport(el) {
+    el.dataset.report = "sending";
+    const res = await ask({ type: "report-cancel", id: el.dataset.reportId });
+    if (!el.isConnected) return;
+    if (res.ok) {
+      delete el.dataset.report;
+      delete el.dataset.reportId;
+      showNotice("Signalement annulé", "");
+    } else {
+      el.dataset.report = "done";
+      console.warn("[Phylactère] Annulation impossible :", res.error);
+      showNotice("Annulation impossible : " + res.error, "error");
     }
   }
 
@@ -498,7 +535,7 @@
         ev.stopPropagation();
         if (ev.altKey) {
           ev.preventDefault();
-          report(e, b, el);
+          toggleReport(e, b, el);
         } else {
           el.classList.toggle("phy-peek");
         }
@@ -508,19 +545,27 @@
     document.body.appendChild(layer);
     e.layer = layer;
     e.lastW = undefined;
+    e.rect = null;
     position(e, e.img.getBoundingClientRect());
   }
 
   // Calque en position absolue dans la page, superposé à l'image (rectangle `r` déjà lu).
+  // Rien n'est réécrit si le calque n'a pas bougé : la page de Naver mute souvent
+  // (commentaires, publicités), et chaque mutation relance un repositionnement.
   function position(e, r) {
-    if (!r.width || !r.height) {
+    if (!r?.width || !r.height) {
       e.layer.style.display = "none";
+      e.rect = null;
       return;
     }
+    const left = r.left + scrollX, top = r.top + scrollY;
+    const rect = `${left},${top},${r.width},${r.height}`;
+    if (e.rect === rect) return;
+    e.rect = rect;
     Object.assign(e.layer.style, {
       display: "",
-      left: r.left + scrollX + "px",
-      top: r.top + scrollY + "px",
+      left: left + "px",
+      top: top + "px",
       width: r.width + "px",
       height: r.height + "px"
     });
@@ -562,10 +607,7 @@
       // Toutes les lectures d'abord, puis toutes les écritures.
       const layers = [...entries.values()].filter((e) => e.layer);
       const rects = layers.map((e) => e.img.isConnected ? e.img.getBoundingClientRect() : null);
-      layers.forEach((e, i) => {
-        if (rects[i]) position(e, rects[i]);
-        else e.layer.style.display = "none";
-      });
+      layers.forEach((e, i) => position(e, rects[i]));
     });
   }
   addEventListener("resize", scheduleReposition);
@@ -658,7 +700,7 @@
     const up = upcoming?.state === "ready" ? upcoming : null;
     if (working) {
       text += " · en cours";
-    } else if (up && up.done + up.failed < up.urls.length) {
+    } else if (up && translateMode === "episode" && up.done + up.failed < up.urls.length) {
       text += ` · épisode suivant ${up.done}/${up.urls.length}`;
       title = `Préchargement de l'épisode ${up.episodeId} pendant la lecture.\n${HINT}`;
     } else if (waiting) {
@@ -668,7 +710,7 @@
     }
     if (pause?.kind === "down") {
       text = "Serveur arrêté";
-      title = `${pause.error}\nNouvel essai toutes les 5 s.\n${HINT}`;
+      title = `${pause.error}\nNouvel essai toutes les ${HEALTH_RETRY_MS / 1000} s.\n${HINT}`;
       state = "error";
     } else if (pause?.kind === "token") {
       text = "Jeton à saisir dans le popup";

@@ -86,6 +86,24 @@ def test_context_is_limited_to_episode_language_and_model(cache):
     assert run(cache.context("s", "66", 1, "fr", "m", 15)) == [("bon", "ok")]
 
 
+def test_context_keeps_one_translation_per_image(cache):
+    # Même image traduite avec deux versions du prompt (clés différentes) : la plus récente.
+    run(cache.put_translation("ancien", "s", "66", 0, "fr", "m", result(("a", "ancien"))))
+    run(cache.put_translation("nouveau", "s", "66", 0, "fr", "m", result(("a", "nouveau"))))
+    assert run(cache.context("s", "66", 1, "fr", "m", 15)) == [("a", "nouveau")]
+
+
+def test_translation_started_before_a_glossary_change_is_not_cached(cache):
+    version = cache.glossary_version("s")
+    run(cache.put_glossary("s", [GlossaryEntry(ko="가", fr="Ga")]))
+    run(cache.put_translation("k", "s", "66", 0, "fr", "m", result(("가", "A")), version))
+    assert run(cache.get_translation("k")) is None
+
+    version = cache.glossary_version("s")
+    run(cache.put_translation("k", "s", "66", 0, "fr", "m", result(("가", "Ga")), version))
+    assert run(cache.get_translation("k")) is not None
+
+
 def test_glossary_roundtrip_and_invalidates_images_mentioning_the_term(cache):
     put(cache, 0, ("재웅아 가자", "Allez, Réung"))
     put(cache, 1, ("안녕", "Salut"))

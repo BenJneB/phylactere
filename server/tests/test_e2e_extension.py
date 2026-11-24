@@ -581,7 +581,8 @@ def server_glossary(server) -> list[dict]:
 
 
 def test_alt_click_reports_bubble(browser, server):
-    """Alt+clic : le serveur enregistre la bulle (lignes OCR, découpe) ; pas d'effacement."""
+    """Alt+clic : le serveur enregistre la bulle (lignes OCR, découpe), sans l'effacer ;
+    un second Alt+clic annule le signalement."""
     context, worker = browser
     server.start()
     configure(worker, server.port, server.token, "scroll", lookahead=1)
@@ -602,8 +603,15 @@ def test_alt_click_reports_bubble(browser, server):
     assert [line["text"] for line in data["lines"]] == ["가66-0"]
     assert (reports_dir() / data["crop"]).is_file()
 
-    bubble.click(modifiers=["Alt"])  # déjà signalée : pas de doublon
-    page.wait_for_timeout(500)
+    # Second Alt+clic : le signalement est annulé (fichiers supprimés), pas dupliqué.
+    bubble.click(modifiers=["Alt"])
+    expect(bubble).not_to_have_attribute("data-report", re.compile(".*"), timeout=10_000)
+    expect(page.locator(BADGE)).to_contain_text("Signalement annulé")
+    assert list(reports_dir().iterdir()) == []
+
+    # Et la bulle peut être signalée de nouveau.
+    bubble.click(modifiers=["Alt"])
+    expect(bubble).to_have_attribute("data-report", "done", timeout=10_000)
     assert len(list(reports_dir().glob("*.json"))) == 1
 
 
@@ -679,6 +687,36 @@ def test_next_episode_is_prefetched_after_80_percent(browser, server, world):
     expect(page.locator(BUBBLE, has_text="FR:가67-")).to_have_count(IMAGE_COUNT, timeout=15_000)
     assert (world.translations, world.ocr_runs) == (translations, ocr_runs)
     assert world.requests_for(68) == []  # le script d'état de la page quittée est ignoré
+
+
+def test_next_episode_after_navigation_without_reload(browser, server, world):
+    """Après une navigation sans rechargement, les scripts de la page restent ceux du
+    premier épisode : l'épisode suivant est lu dans le HTML de l'épisode affiché. Les pages
+    téléchargées pour le préchargement partent sans les cookies de l'utilisateur."""
+    context, worker = browser
+    context.add_cookies([{"name": "NID_SES", "value": "x", "url": "https://comic.naver.com"}])
+    cookies: dict[str, str | None] = {}
+
+    def serve(route):
+        url = route.request.url
+        no = int(re.search(r"no=(\d+)", url).group(1))
+        if no != 66:
+            cookies[url] = route.request.all_headers().get("cookie")
+        route.fulfill(content_type="text/html; charset=utf-8", body=page_html(no, next_no=no + 1))
+
+    context.route("https://comic.naver.com/**", serve)
+    server.start()
+    configure(worker, server.port, server.token)
+    page = open_episode(context)
+    expect(page.locator(BADGE)).to_contain_text(f"{IMAGE_COUNT}/{IMAGE_COUNT}", timeout=30_000)
+
+    page.locator("#next").click()  # 67, sans rechargement : le script annonce encore 67
+    expect(page.locator(BUBBLE, has_text="FR:가67-")).to_have_count(IMAGE_COUNT, timeout=30_000)
+    page.locator("#content_image_10").scroll_into_view_if_needed()
+    expect(page.locator(BADGE)).to_contain_text("épisode suivant", timeout=10_000)
+    expect(page.locator(BADGE)).not_to_contain_text("épisode suivant", timeout=30_000)
+    assert sorted(world.requests_for(68)) == [(i, "prefetch") for i in range(IMAGE_COUNT)]
+    assert cookies and all(value is None for value in cookies.values())
 
 
 def test_no_next_episode_prefetch_in_scroll_mode(browser, server, world):

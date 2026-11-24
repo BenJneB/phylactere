@@ -29,10 +29,10 @@ from pydantic import BaseModel
 
 from phylactere import __version__
 from phylactere.cache import Cache, GlossaryEntry
-from phylactere.config import Settings, load_settings
+from phylactere.config import Settings, load_settings, reports_dir
 from phylactere.debug import render_debug
 from phylactere.errors import ServiceError
-from phylactere.fetch import FetchError
+from phylactere.fetch import FetchError, decode_image
 from phylactere.ocr import OcrEngine
 from phylactere.pipeline import (
     Pipeline,
@@ -40,9 +40,8 @@ from phylactere.pipeline import (
     SuggestResponse,
     TranslateRequest,
     TranslateResponse,
-    decode_images,
 )
-from phylactere.reports import ReportRequest, ReportResponse
+from phylactere.reports import ReportRequest, ReportResponse, delete_report
 from phylactere.schemas import OcrResult
 from phylactere.translate import OllamaTranslator
 
@@ -64,6 +63,13 @@ class Health(BaseModel):
     # "auto" tant que le modèle charge et que l'appareil n'est pas encore choisi
     device: Literal["gpu", "cpu", "auto"]
     version: str
+
+
+async def ollama_tags(request: Request) -> dict:
+    """Modèles installés dans Ollama (GET /api/tags) ; lève httpx.HTTPError s'il ne répond pas."""
+    response = await request.app.state.ollama.get("/api/tags")
+    response.raise_for_status()
+    return response.json()
 
 
 def require_token(
@@ -141,10 +147,9 @@ def create_app(
     @app.get("/health")
     async def health(request: Request) -> Health:
         try:
-            response = await request.app.state.ollama.get("/api/tags")
-            response.raise_for_status()
+            await ollama_tags(request)
             ollama = "ok"
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ValueError):  # ValueError : réponse non JSON
             ollama = "down"
         return Health(
             ok=True,
@@ -161,13 +166,11 @@ def create_app(
     async def models(request: Request) -> dict:
         """Modèles installés dans Ollama (proxy de GET /api/tags)."""
         try:
-            response = await request.app.state.ollama.get("/api/tags")
-            response.raise_for_status()
+            return await ollama_tags(request)
         except httpx.HTTPError as exc:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, f"Ollama injoignable : {exc}"
             ) from exc
-        return response.json()
 
     @protected.post("/translate")
     async def translate(request: Request, body: TranslateRequest) -> TranslateResponse:
@@ -179,6 +182,14 @@ def create_app(
         """Signalement d'une bulle (Alt+clic dans l'extension) : JSON et découpe PNG dans
         le dossier des signalements, pour constituer un corpus d'échecs."""
         return await request.app.state.pipeline.report(body)
+
+    @protected.delete("/report/{report_id}")
+    async def cancel_report(report_id: str) -> dict:
+        """Annule un signalement (second Alt+clic sur la bulle) : supprime ses fichiers."""
+        if not await asyncio.to_thread(delete_report, reports_dir(), report_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Signalement introuvable.")
+        logger.info("Signalement %s annulé.", report_id)
+        return {"removed": report_id}
 
     @protected.get("/glossary/{series_id}")
     async def get_glossary(request: Request, series_id: str) -> list[GlossaryEntry]:
@@ -242,12 +253,12 @@ def create_app(
             pipeline.download_neighbor(prev_image_url or None),
             pipeline.download_neighbor(next_image_url or None),
         )
-        images = await asyncio.to_thread(decode_images, data, previous, following)
-        result = await request.app.state.ocr.recognize(*images)
+        result = await pipeline.recognize(data, previous, following)
 
         if output == "json":
             return result
-        return Response(render_debug(images[0], result), media_type="image/png")
+        image = await asyncio.to_thread(decode_image, data)
+        return Response(render_debug(image, result), media_type="image/png")
 
     app.include_router(protected)
     return app

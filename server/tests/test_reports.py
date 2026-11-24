@@ -149,3 +149,63 @@ def test_html_report_lists_reports_newest_first(client):
     assert f'src="{first}.png"' in html
     assert "&lt;b&gt;" in html and "<b><b></b>" not in html  # texte échappé
     assert "안녕" in html
+
+
+def test_html_report_skips_incomplete_reports(capsys):
+    script = load_script()
+    html = script.render_html([{"id": "incomplet", "bubble": {}}])
+    assert 'class="report"' not in html and "Aucun signalement" in html
+    assert "incomplet" in capsys.readouterr().err
+
+
+def test_report_date_is_iso_with_offset(client):
+    from datetime import datetime
+
+    block = client.post("/translate", json=request()).json()["blocks"][0]
+    report_id = client.post("/report", json=report_body(block)).json()["id"]
+    assert datetime.fromisoformat(saved(report_id)["created"]).utcoffset() is not None
+
+
+def test_failed_json_write_removes_the_crop(tmp_path, monkeypatch):
+    from phylactere.reports import ReportRequest, write_report
+
+    def fail(*_args, **_kwargs):
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(Path, "write_text", fail)
+    req = ReportRequest(
+        image_url="https://x/a.jpg",
+        series_id="s",
+        episode_id="1",
+        index=0,
+        box=Box(x=0, y=0, w=1, h=1),
+        original="가",
+        translated="A",
+    )
+    with pytest.raises(OSError):
+        write_report(tmp_path, req, "fr", "m", {}, None, Image.new("RGB", (4, 4)))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cancel_report_deletes_its_files(client):
+    block = client.post("/translate", json=request()).json()["blocks"][0]
+    other = client.post("/report", json=report_body(block)).json()["id"]
+    report_id = client.post("/report", json=report_body(block)).json()["id"]
+
+    response = client.delete(f"/report/{report_id}")
+
+    assert response.status_code == 200
+    assert not (reports_dir() / f"{report_id}.json").exists()
+    assert not (reports_dir() / f"{report_id}.png").exists()
+    assert (reports_dir() / f"{other}.json").exists()  # les autres restent
+    assert client.delete(f"/report/{report_id}").status_code == 404  # déjà annulé
+
+
+def test_cancel_report_refuses_foreign_names(client):
+    """Seul un identifiant de signalement est accepté : aucun autre fichier n'est touché."""
+    reports_dir().mkdir(parents=True)
+    victim = reports_dir() / "index.json"
+    victim.write_text("{}", encoding="utf-8")
+    for name in ("index", "..%2Fconfig", "20260101-000000-zzzzzz"):
+        assert client.delete(f"/report/{name}").status_code == 404
+    assert victim.exists()

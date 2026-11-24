@@ -24,7 +24,7 @@ async function activeTab() {
 }
 
 async function init() {
-  const s = await chrome.storage.local.get(DEFAULTS);
+  const s = await settings();
   $("enabled").checked = s.enabled;
   $("serverUrl").value = s.serverUrl;
   $("token").value = s.token;

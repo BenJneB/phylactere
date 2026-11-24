@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 Edge = Literal["top", "bottom"]
 
@@ -74,3 +74,19 @@ class ImageSize(BaseModel):
 class OcrResult(BaseModel):
     image_size: ImageSize
     bubbles: list[Bubble]
+
+
+class ImageRequest(BaseModel):
+    """Image d'un épisode, telle que l'extension la désigne (/translate, /report)."""
+
+    image_url: str
+    series_id: str = Field(min_length=1, max_length=64)
+    episode_id: str = Field(min_length=1, max_length=64)
+    index: int = Field(ge=0)
+    target_lang: str | None = Field(default=None, min_length=2, max_length=10)
+    # Modèle Ollama choisi dans l'extension (défaut : celui de la configuration).
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    # Images voisines dans l'épisode : permettent de lire les bulles coupées entre deux
+    # images, et entrent dans la clé du cache OCR.
+    prev_image_url: str | None = None
+    next_image_url: str | None = None
