@@ -11,6 +11,7 @@ if (typeof importScripts === "function") importScripts("defaults.js", "api.js");
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const handlers = {
     translate: () => translate(msg.request),
+    report: () => report(msg.request),
     health: () => health(),
     models: () => models(),
     "clear-cache": () => clearCache(msg.seriesId),
@@ -27,7 +28,18 @@ async function translate(request) {
   const s = await settings();
   const body = { ...request, target_lang: s.targetLang };
   if (s.model) body.model = s.model;
-  return call("/translate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
+  // Délai dépassé : le serveur est lent (CPU chargé), pas arrêté ; content.js remet l'image
+  // en file, et la nouvelle demande est fusionnée avec la tâche en cours ou servie par le cache.
+  return call("/translate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "timeout", s });
+}
+
+// Signalement d'une bulle (Alt+clic) : le serveur enregistre la bulle, ses lignes OCR et
+// sa découpe. Il peut devoir refaire l'OCR si le cache a été vidé : délai de /translate.
+async function report(request) {
+  const s = await settings();
+  const body = { ...request, target_lang: s.targetLang };
+  if (s.model) body.model = s.model;
+  return call("/report", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
 }
 
 function health() {

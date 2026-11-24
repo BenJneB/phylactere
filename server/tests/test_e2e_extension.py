@@ -1,4 +1,4 @@
-"""Tests de bout en bout de l'extension (jalons 7, 8 et 10).
+"""Tests de bout en bout de l'extension (jalons 7, 8, 10 et 11).
 
 Chromium (Playwright) charge l'extension non empaquetée, ouvre une fausse page d'épisode
 Naver et parle à un vrai serveur Phylactère lancé dans un thread, dont l'OCR, Ollama et le
@@ -28,7 +28,7 @@ import pytest
 import uvicorn
 from PIL import Image
 
-from phylactere.config import load_settings
+from phylactere.config import load_settings, reports_dir
 from phylactere.main import create_app
 from tests.helpers import FakeDetector, line
 from tests.test_smoke import free_port
@@ -71,17 +71,34 @@ def expected_text(episode: int, index: int) -> str:
     return f"FR:가{episode}-{index}"
 
 
-def page_html(episode: int) -> str:
+def page_html(episode: int, next_no: int | None = None) -> str:
     """Page d'épisode minimale, reprise de la structure réelle de Naver : la vignette (même
     dossier que les images, à ignorer) puis les images dans #sectionContWide. Le lien
-    « suivant » change d'épisode sans recharger la page, comme le lecteur de Naver."""
+    « suivant » change d'épisode sans recharger la page.
+
+    ``next_no`` : ajoute le script d'état de Naver (``window.__state__``) qui annonce
+    l'épisode suivant, déclencheur du préchargement de cet épisode (jalon 11)."""
+    state = (
+        f"""<script>
+window.__state__ = {{
+    article: {{"no":{episode},"subtitle":"test"}},
+    nextArticle: {{
+        no: '{next_no}',
+        charge: false,
+        blindInspection: false,
+    }},
+}};
+</script>"""
+        if next_no is not None
+        else ""
+    )
     images = "\n".join(
         f'<img id="content_image_{i}" src="{image_url(episode, i)}" '
         f'width="{IMAGE_W}" height="{IMAGE_H}" style="display:block">'
         for i in range(IMAGE_COUNT)
     )
     return f"""<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><title>Épisode {episode}</title></head>
+<html lang="ko"><head><meta charset="utf-8"><title>Épisode {episode}</title>{state}</head>
 <body style="margin:0">
 <img id="thumb" src="https://image-comic.pstatic.net/webtoon/{SERIES}/{episode}/thumbnail_202x120.png">
 <a id="next" href="#">suivant</a>
@@ -110,6 +127,10 @@ class World:
         self.in_flight = 0
         self.max_in_flight = 0
         self.suggest_requests = 0
+        self.translations = 0  # requêtes de traduction reçues par Ollama
+        self.ocr_runs = 0  # images lues par l'OCR simulé
+        # Délai propre à une bulle (texte simulé → secondes), pour les délais dépassés.
+        self.slow: dict[str, float] = {}
         # Réponse du modèle aux propositions : un terme présent dans les bulles, un inventé.
         self.suggestions = [
             {"ko": "가66", "fr": "Ga", "note": "héros"},
@@ -135,6 +156,8 @@ class World:
             return httpx.Response(200, json={"message": {"content": json.dumps(content)}})
         user = body["messages"][1]["content"]
         bubbles = json.loads(user.rsplit("\n", 1)[1])
+        self.translations += 1
+        await asyncio.sleep(max((self.slow.get(b["texte"], 0) for b in bubbles), default=0))
         # Avec un glossaire, la traduction le montre : on voit l'épisode retraduit.
         prefix = "GL" if "Glossaire de la série" in user else "FR"
         content = {
@@ -146,8 +169,11 @@ class World:
         return httpx.Response(200, json={"message": {"content": json.dumps(content)}})
 
     def detector(self):
+        world = self
+
         class Detector(FakeDetector):
             def detect(self, image_bgr):
+                world.ocr_runs += 1
                 blue, green, red = (int(v) for v in image_bgr[0, 0])
                 text = f"가{green}-{red // 16}"
                 return [line(LINE_X, LINE_Y, LINE_W, LINE_H, text=text)]
@@ -549,3 +575,124 @@ def server_glossary(server) -> list[dict]:
         headers={"X-Phylactere-Token": server.token},
     )
     return response.json()
+
+
+# --- Jalon 11 : signalement, délai dépassé, préchargement de l'épisode suivant ---
+
+
+def test_alt_click_reports_bubble(browser, server):
+    """Alt+clic : le serveur enregistre la bulle (lignes OCR, découpe) ; pas d'effacement."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    page = open_episode(context)
+    bubble = bubble_on(page, 66, 0)
+    expect(bubble).to_be_visible(timeout=15_000)
+
+    bubble.click(modifiers=["Alt"])
+    expect(bubble).to_have_attribute("data-report", "done", timeout=10_000)
+    expect(bubble).not_to_have_class(re.compile(r"\bphy-peek\b"))
+    expect(page.locator(BADGE)).to_contain_text("Bulle signalée")
+
+    reports = list(reports_dir().glob("*.json"))
+    assert len(reports) == 1
+    data = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert (data["episode_id"], data["index"]) == ("66", 0)
+    assert data["bubble"]["translated"] == expected_text(66, 0)
+    assert [line["text"] for line in data["lines"]] == ["가66-0"]
+    assert (reports_dir() / data["crop"]).is_file()
+
+    bubble.click(modifiers=["Alt"])  # déjà signalée : pas de doublon
+    page.wait_for_timeout(500)
+    assert len(list(reports_dir().glob("*.json"))) == 1
+
+
+def shorten_timeout(worker, ms: int) -> None:
+    worker.evaluate(f"() => {{ TRANSLATE_TIMEOUT_MS = {ms}; }}")
+
+
+def test_timeout_puts_image_back_in_queue(browser, server, world):
+    """Délai dépassé côté extension : l'image repart en file et la nouvelle demande est
+    fusionnée avec la tâche du serveur (ou servie par le cache), sans erreur."""
+    context, worker = browser
+    server.start()
+    world.ollama_delay = 0.05
+    world.slow = {"가66-0": 1.5}
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    shorten_timeout(worker, 1000)
+    page = open_episode(context)
+
+    expect(bubble_on(page, 66, 0)).to_be_visible(timeout=15_000)
+    expect(page.locator(BADGE)).to_have_text(
+        "Phylactère · Traduit · 2/12 · en attente du défilement", timeout=10_000
+    )
+    assert world.requests_for(66).count((0, "visible")) == 2
+    assert world.translations == 2  # une seule traduction par image
+
+
+def test_repeated_timeouts_end_in_error(browser, server, world):
+    context, worker = browser
+    server.start()
+    world.ollama_delay = 0.05
+    world.slow = {"가66-0": 4}
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    shorten_timeout(worker, 400)
+    page = open_episode(context)
+
+    # L'image 1 attend derrière l'image 0 dans la file du serveur : elle expire aussi.
+    expect(page.locator(BADGE)).to_contain_text("2 erreur(s)", timeout=15_000)
+    expect(page.locator(BADGE)).to_have_attribute("title", re.compile(r"\(3 essais\)"))
+    assert world.requests_for(66).count((0, "visible")) == 3  # 1 envoi + 2 nouvelles tentatives
+
+
+def test_next_episode_is_prefetched_after_80_percent(browser, server, world):
+    """Mode « episode » : une fois l'épisode traduit et la lecture passée à 80 %, les
+    images de l'épisode suivant partent en « prefetch » ; à son ouverture, tout vient du
+    cache (mêmes voisines, donc même clé OCR)."""
+    context, worker = browser
+    context.route(
+        "https://comic.naver.com/**",
+        lambda route: route.fulfill(
+            content_type="text/html; charset=utf-8",
+            body=page_html(66, next_no=67) if "no=66" in route.request.url else page_html(67),
+        ),
+    )
+    server.start()
+    configure(worker, server.port, server.token)
+    page = open_episode(context)
+    badge = page.locator(BADGE)
+    all_done = f"Phylactère · Traduit · {IMAGE_COUNT}/{IMAGE_COUNT}"
+
+    # Épisode traduit, mais lecture au début : rien de l'épisode suivant.
+    expect(badge).to_have_text(all_done, timeout=30_000)
+    page.wait_for_timeout(500)
+    assert world.requests_for(67) == []
+
+    page.locator("#content_image_10").scroll_into_view_if_needed()  # 11 images sur 12 atteintes
+    expect(badge).to_contain_text("épisode suivant", timeout=10_000)
+    expect(badge).to_have_text(all_done, timeout=30_000)
+    assert sorted(world.requests_for(67)) == [(i, "prefetch") for i in range(IMAGE_COUNT)]
+    translations, ocr_runs = world.translations, world.ocr_runs
+
+    # Ouverture de l'épisode suivant : traduit sans nouvel OCR ni nouvelle traduction.
+    page.locator("#next").click()
+    expect(page.locator(BUBBLE, has_text="FR:가67-")).to_have_count(IMAGE_COUNT, timeout=15_000)
+    assert (world.translations, world.ocr_runs) == (translations, ocr_runs)
+    assert world.requests_for(68) == []  # le script d'état de la page quittée est ignoré
+
+
+def test_no_next_episode_prefetch_in_scroll_mode(browser, server, world):
+    context, worker = browser
+    context.route(
+        "https://comic.naver.com/**",
+        lambda route: route.fulfill(
+            content_type="text/html; charset=utf-8", body=page_html(66, next_no=67)
+        ),
+    )
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=20)
+    page = open_episode(context)
+    expect(page.locator(BUBBLE)).to_have_count(IMAGE_COUNT, timeout=30_000)
+    page.locator("#content_image_11").scroll_into_view_if_needed()
+    page.wait_for_timeout(1000)
+    assert world.requests_for(67) == []
