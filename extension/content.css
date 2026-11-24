@@ -69,3 +69,49 @@
 /* Maj+clic (une bulle) ou Maj+Alt+T (toute l'image) : retraduction en cours */
 .phy-bubble[data-retranslate="sending"],
 .phy-layer.phy-retranslating .phy-bubble { outline: 2px dashed #2f5bd3; outline-offset: 1px; }
+
+/* Résumé « Précédemment… » de l'épisode précédent (jalon 15), au-dessus des images.
+   `all: initial` / `all: unset` : les styles de la page de Naver ne s'y appliquent pas. */
+.phy-previously {
+  all: initial;
+  display: block;
+  box-sizing: border-box;
+  max-width: 690px;
+  margin: 16px auto;
+  padding: 10px 14px;
+  background: #fffbea;
+  color: #1d2a44;
+  border: 2px solid #1d2a44;
+  border-radius: 14px;
+  font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+  text-align: left;
+}
+.phy-previously > summary {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 700;
+  user-select: none;
+}
+.phy-previously > summary::-webkit-details-marker { display: none; }
+.phy-previously > summary::before { content: "▸"; }
+.phy-previously[open] > summary::before { content: "▾"; }
+.phy-previously .phy-close {
+  all: unset;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.phy-previously .phy-close:hover,
+.phy-previously .phy-close:focus-visible { background: rgba(29, 42, 68, 0.12); }
+.phy-previously > p {
+  all: unset;
+  display: block;
+  margin-top: 6px;
+  white-space: pre-line;
+}

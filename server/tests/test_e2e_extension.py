@@ -1,4 +1,4 @@
-"""Tests de bout en bout de l'extension (jalons 7, 8, 10, 11, 12 et 13).
+"""Tests de bout en bout de l'extension (jalons 7, 8 et 10 à 15).
 
 Chromium (Playwright) charge l'extension non empaquetée, ouvre une fausse page d'épisode
 Naver et parle à un vrai serveur Phylactère lancé dans un thread, dont l'OCR, Ollama et le
@@ -73,25 +73,35 @@ def expected_text(episode: int, index: int) -> str:
     return f"FR:가{episode}-{index}"
 
 
-def page_html(episode: int, next_no: int | None = None) -> str:
+def page_html(episode: int, next_no: int | None = None, prev_no: int | None = None) -> str:
     """Page d'épisode minimale, reprise de la structure réelle de Naver : la vignette (même
     dossier que les images, à ignorer) puis les images dans #sectionContWide. Le lien
     « suivant » change d'épisode sans recharger la page.
 
     ``next_no`` : ajoute le script d'état de Naver (``window.__state__``) qui annonce
-    l'épisode suivant, déclencheur du préchargement de cet épisode (jalon 11)."""
-    state = (
-        f"""<script>
-window.__state__ = {{
-    article: {{"no":{episode},"subtitle":"test"}},
+    l'épisode suivant, déclencheur du préchargement de cet épisode (jalon 11). ``prev_no`` :
+    l'épisode précédent (``prevArticle``), dont le résumé est affiché (jalon 15)."""
+    articles = ""
+    if prev_no is not None:
+        articles += f"""
+    prevArticle: {{
+        no: '{prev_no}',
+        blindInspection: false,
+    }},"""
+    if next_no is not None:
+        articles += f"""
     nextArticle: {{
         no: '{next_no}',
         charge: false,
         blindInspection: false,
-    }},
+    }},"""
+    state = (
+        f"""<script>
+window.__state__ = {{
+    article: {{"no":{episode},"subtitle":"test"}},{articles}
 }};
 </script>"""
-        if next_no is not None
+        if articles
         else ""
     )
     images = "\n".join(
@@ -129,6 +139,7 @@ class World:
         self.in_flight = 0
         self.max_in_flight = 0
         self.suggest_requests = 0
+        self.summary_prompts: list[str] = []  # demandes de résumé reçues par Ollama (jalon 15)
         self.translations = 0  # requêtes de traduction reçues par Ollama
         self.ocr_runs = 0  # images lues par l'OCR simulé
         # Délai propre à une bulle (texte simulé → secondes), pour les délais dépassés.
@@ -155,6 +166,10 @@ class World:
         if "entries" in body["format"]["properties"]:  # propositions de glossaire (jalon 10)
             self.suggest_requests += 1
             content = {"entries": self.suggestions}
+            return httpx.Response(200, json={"message": {"content": json.dumps(content)}})
+        if "summary" in body["format"]["properties"]:  # résumé « Précédemment… » (jalon 15)
+            self.summary_prompts.append(body["messages"][1]["content"])
+            content = {"summary": f"Résumé simulé n° {len(self.summary_prompts)}."}
             return httpx.Response(200, json={"message": {"content": json.dumps(content)}})
         user = body["messages"][1]["content"]
         bubbles = json.loads(user.rsplit("\n", 1)[1])
@@ -867,3 +882,111 @@ def test_ctrl_click_corrects_bubble(browser, server, world):
     expect(page.locator(BADGE)).to_contain_text("Correction effacée")
     expect(bubble_on(page, 66, 0)).to_be_visible()
     expect(page.locator(f"{BUBBLE}[data-corrected]")).to_have_count(0)
+
+
+# --- Jalon 15 : résumé « Précédemment… » ---
+
+PREVIOUSLY = ".phy-previously"
+
+
+def serve_with_state(context) -> None:
+    """Pages d'épisode avec le script d'état de Naver (épisodes précédent et suivant)."""
+
+    def serve(route):
+        no = int(re.search(r"no=(\d+)", route.request.url).group(1))
+        route.fulfill(
+            content_type="text/html; charset=utf-8",
+            body=page_html(no, next_no=no + 1, prev_no=no - 1),
+        )
+
+    context.route("https://comic.naver.com/**", serve)
+
+
+def test_previously_shown_when_next_episode_opens(browser, server, world):
+    """Le résumé de l'épisode lu est calculé d'avance à la fin de la lecture (« background »),
+    puis affiché au-dessus des images de l'épisode suivant ; × ferme l'encart."""
+    context, worker = browser
+    serve_with_state(context)
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=20)
+    page = open_episode(context)
+
+    # Épisode 65 jamais lu : pas d'encart.
+    expect(page.locator(BUBBLE)).to_have_count(IMAGE_COUNT, timeout=30_000)
+    page.wait_for_timeout(500)
+    expect(page.locator(PREVIOUSLY)).to_have_count(0)
+    assert world.summary_prompts == []
+
+    # Fin de la lecture : résumé de l'épisode 66 demandé d'avance, bulles dans l'ordre.
+    page.locator("#content_image_11").scroll_into_view_if_needed()
+    deadline = time.monotonic() + 10
+    while not world.summary_prompts and time.monotonic() < deadline:
+        page.wait_for_timeout(100)
+    assert len(world.summary_prompts) == 1
+    prompt = world.summary_prompts[0]
+    assert prompt.index("- FR:가66-0") < prompt.index("- FR:가66-11")
+    assert "lu qu'une partie" not in prompt
+
+    # Épisode suivant (sans rechargement) : l'encart vient du résumé en cache.
+    page.locator("#next").click()
+    box = page.locator(PREVIOUSLY)
+    expect(box).to_be_visible(timeout=15_000)
+    expect(box).to_contain_text("Précédemment…")
+    expect(box).to_contain_text("Résumé simulé n° 1.")
+    expect(box).not_to_contain_text("lu en partie")
+    assert len(world.summary_prompts) == 1
+    # Au-dessus de la première image, sans la recouvrir.
+    first = page.locator("#content_image_0").bounding_box()
+    assert box.bounding_box()["y"] + box.bounding_box()["height"] <= first["y"]
+    # Les bulles suivent les images, décalées par l'encart.
+    expect(bubble_on(page, 67, 0)).to_be_visible(timeout=15_000)
+    bubble = bubble_on(page, 67, 0).bounding_box()
+    scale = first["width"] / IMAGE_W
+    assert bubble["y"] == pytest.approx(first["y"] + (LINE_Y - PAD) * scale, abs=2)
+
+    # Repli, puis fermeture.
+    box.locator("summary span").click()
+    expect(box.locator("p")).to_be_hidden()
+    box.locator(".phy-close").click()
+    expect(box).to_have_count(0)
+
+
+def test_previously_of_episode_read_in_part(browser, server, world):
+    """Épisode précédent lu en partie : résumé demandé à l'ouverture du suivant, avec la
+    mention « lu en partie » (moins d'images en cache que dans sa page)."""
+    context, worker = browser
+    serve_with_state(context)
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=2)
+    page = open_episode(context)
+    expect(page.locator(BUBBLE)).to_have_count(3, timeout=15_000)  # images 0 à 2 seules
+
+    page.goto(episode_url(67))
+    box = page.locator(PREVIOUSLY)
+    expect(box).to_contain_text("Précédemment… (épisode lu en partie)", timeout=15_000)
+    expect(box).to_contain_text("Résumé simulé n° 1.")
+    assert "n'a lu qu'une partie" in world.summary_prompts[0]
+
+
+def test_previously_option_in_popup(browser, server, world):
+    """Option du popup : décochée, l'encart disparaît sans recharger ; recochée, il revient."""
+    context, worker = browser
+    serve_with_state(context)
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=2)
+    page = open_episode(context)
+    expect(page.locator(BUBBLE)).to_have_count(3, timeout=15_000)
+    page.goto(episode_url(67))
+    expect(page.locator(PREVIOUSLY)).to_be_visible(timeout=15_000)
+
+    extension_id = worker.url.split("/")[2]
+    popup = context.new_page()
+    popup.goto(f"chrome-extension://{extension_id}/popup.html")
+    expect(popup.locator("#summary")).to_be_checked()
+    popup.locator("#summary").uncheck()
+    expect(popup.locator("#status")).to_have_text("Résumé de l’épisode précédent désactivé.")
+    expect(page.locator(PREVIOUSLY)).to_have_count(0)
+
+    popup.locator("#summary").check()
+    expect(page.locator(PREVIOUSLY)).to_be_visible(timeout=15_000)
+    assert len(world.summary_prompts) == 1  # le résumé vient du cache

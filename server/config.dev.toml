@@ -17,5 +17,10 @@ model = "qwen3.5:4b"
 suggest_bubbles = 80
 timeout_s = 1800
 
+[summary]
+# Sur CPU, ~10 jetons/s à la lecture du prompt : un épisode (~1 000 jetons) prend quelques
+# minutes.
+timeout_s = 1800
+
 [ocr]
 device = "cpu"

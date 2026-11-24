@@ -32,6 +32,7 @@ async function init() {
   $("targetLang").value = s.targetLang;
   $("translateMode").value = s.translateMode;
   $("lookahead").value = clampLookahead(s.lookahead);
+  $("summary").checked = s.summary;
   showMode();
   savedModel = s.model;
   savedRetranslateModel = s.retranslateModel;
@@ -149,6 +150,13 @@ $("retranslateModel").addEventListener("change", async () => {
     : "Retraduction avec le modèle de traduction.");
 });
 
+// Résumé « Précédemment… » (jalon 15) : enregistré tout de suite ; l'encart apparaît ou
+// disparaît sans retraduire la page.
+$("summary").addEventListener("change", async () => {
+  await chrome.storage.local.set({ summary: $("summary").checked });
+  status($("summary").checked ? "Résumé de l’épisode précédent activé." : "Résumé de l’épisode précédent désactivé.");
+});
+
 $("lookahead").addEventListener("change", async () => {
   const lookahead = clampLookahead($("lookahead").value);
   $("lookahead").value = lookahead;
@@ -198,7 +206,7 @@ async function refreshStats() {
   const rows = [];
   const limit = st.cache.max_bytes ? ` sur ${megabytes(st.cache.max_bytes)}` : " (sans limite)";
   rows.push(["Cache", megabytes(st.cache.size_bytes) + limit]);
-  rows.push(["En cache", `${st.cache.ocr} image(s) lue(s), ${st.cache.translations} traduction(s), ${st.cache.glossaries} glossaire(s)`]);
+  rows.push(["En cache", `${st.cache.ocr} image(s) lue(s), ${st.cache.translations} traduction(s), ${st.cache.glossaries} glossaire(s), ${st.cache.summaries} résumé(s)`]);
   const share = st.images.served ? Math.round((100 * st.images.cached) / st.images.served) : 0;
   rows.push([`Depuis ${duration(st.uptime_s)}`, `${st.images.served} image(s) servie(s), ${share} % depuis le cache`]);
   const labels = { fetch: "Téléchargement", ocr: "OCR", translate: "Traduction" };

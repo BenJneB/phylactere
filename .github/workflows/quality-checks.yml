@@ -1,0 +1,104 @@
+name: Quality checks
+
+# Vérifications statiques, rapides et sans dépendances lourdes (ni PaddlePaddle, ni
+# navigateur) : lint et format Python, syntaxe de l'extension et des scripts PowerShell.
+# Mêmes déclencheurs que la CI (ci.yml), qui ne garde que les tests.
+on:
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: server/uv.lock
+
+      # Outils de développement seuls (version de ruff fixée par uv.lock), sans le projet.
+      - name: Dépendances
+        run: uv sync --locked --only-dev
+
+      - name: Lint
+        run: uv run --no-sync ruff check . ../scripts
+
+      - name: Format
+        run: uv run --no-sync ruff format --check . ../scripts
+
+  extension:
+    name: Extension (syntaxe JavaScript, manifeste)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # JavaScript vanilla, sans build ni dépendance npm : on vérifie seulement la syntaxe.
+      - name: Syntaxe des scripts
+        run: |
+          for file in *.js; do
+            node --check "$file" || exit 1
+          done
+
+      - name: Manifeste
+        run: |
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            if (m.manifest_version !== 3) throw new Error("manifest_version doit valoir 3");
+            const files = [
+              ...m.content_scripts.flatMap((c) => [...(c.js || []), ...(c.css || [])]),
+              m.background.service_worker, ...m.background.scripts,
+              m.action.default_popup, ...Object.values(m.icons), ...Object.values(m.action.default_icon)
+            ];
+            const missing = files.filter((f) => !fs.existsSync(f));
+            if (missing.length) throw new Error("Fichiers absents : " + missing.join(", "));
+            console.log(`manifest.json valide, ${files.length} fichier(s) référencé(s) présents.`);
+          '
+
+      # Linter de Mozilla (manifeste, API, règles d'addons.mozilla.org), version épinglée.
+      # Échoue sur les erreurs seulement. Avertissement attendu : MANIFEST_FIELD_UNSUPPORTED
+      # sur background.service_worker, que Firefox ignore (il charge background.scripts) ;
+      # c'est ce qui permet une seule base de code pour Chrome et Firefox.
+      - name: web-ext lint (Firefox)
+        run: npx --yes web-ext@8.3.0 lint --source-dir .
+
+  powershell:
+    name: Scripts PowerShell (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntaxe
+        shell: powershell
+        working-directory: scripts
+        run: |
+          $failed = $false
+          foreach ($file in Get-ChildItem -Filter *.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Host "$($file.Name):$($_.Extent.StartLineNumber) $($_.Message)" }
+            }
+          }
+          if ($failed) { exit 1 }

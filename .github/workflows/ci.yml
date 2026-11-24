@@ -1,6 +1,7 @@
 name: CI
 
 # Uniquement sur les pull requests vers main ou dev, et à la demande (voir docs/SPEC.md, section 7.2).
+# Tests seulement : lint, format et syntaxe sont dans quality-checks.yml.
 on:
   pull_request:
     branches: [main, dev]
@@ -44,11 +45,6 @@ jobs:
       - name: Dépendances
         run: uv sync --locked --extra cpu
 
-      - name: Ruff
-        run: |
-          uv run --no-sync ruff check . ../scripts
-          uv run --no-sync ruff format --check . ../scripts
-
       - name: Tests (OCR réel compris)
         run: uv run --no-sync pytest
 
@@ -56,22 +52,6 @@ jobs:
         env:
           PHYLACTERE_CONFIG_DIR: ${{ runner.temp }}/phylactere-check
         run: uv run --no-sync python -m phylactere --check-ocr
-
-      - name: Syntaxe des scripts PowerShell (Windows PowerShell 5.1)
-        if: runner.os == 'Windows'
-        shell: powershell
-        working-directory: scripts
-        run: |
-          $failed = $false
-          foreach ($file in Get-ChildItem -Filter *.ps1) {
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
-            if ($errors) {
-              $failed = $true
-              $errors | ForEach-Object { Write-Host "$($file.Name):$($_.Extent.StartLineNumber) $($_.Message)" }
-            }
-          }
-          if ($failed) { exit 1 }
 
       - name: Fumée via start.sh
         if: runner.os == 'Linux'

@@ -13,6 +13,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     translate: () => translate(msg.request),
     retranslate: () => retranslate(msg.request),
     correct: () => correct(msg.request),
+    summary: () => summary(msg.request),
     report: () => report(msg.request),
     "report-cancel": () => call(`/report/${encodeURIComponent(msg.id)}`, { method: "DELETE" }),
     health: () => health(),
@@ -60,6 +61,15 @@ async function correct(request) {
   const erase = !text.trim();
   const body = withLangModel(erase ? target : { ...target, text, translated }, s);
   return call("/correction", { method: erase ? "DELETE" : "PUT", body, s });
+}
+
+// Résumé « Précédemment… » d'un épisode (jalon 15), calculé par le serveur à partir des
+// bulles en cache. Délai de /translate : au-delà, le serveur continue et garde le résumé,
+// qu'une nouvelle demande retrouve (fusionnée avec la tâche en cours, ou en cache).
+async function summary(request) {
+  const s = await settings();
+  const body = withLangModel(request, s);
+  return call("/summary", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "timeout", s });
 }
 
 function health() {

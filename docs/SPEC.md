@@ -221,11 +221,11 @@ Réalisation (jalon 5) :
 2. Chaque jalon (ou fonctionnalité) se développe sur une branche dédiée, poussée sur un dépôt git privé, puis fait l'objet d'une pull request vers `main`. La fusion n'est faite que si la CI est verte (protection de branche sur `main`). Le PC Windows récupère `main` avec `git pull`.
 3. Validation sur Windows à chaque jalon terminé : `install.ps1` (la première fois), `start.ps1`, puis le test manuel du jalon.
 4. Intégration continue GitHub Actions, en place dès le jalon 1, déclenchée uniquement sur les pull requests vers `main` ou `dev` (`on: pull_request`) et manuellement (`workflow_dispatch`), pas sur les push. Matrice `ubuntu-latest` + `windows-latest` :
-   - `uv sync --extra cpu`, `ruff check`, `ruff format --check`, `pytest` ;
-   - vérification de syntaxe des scripts `.ps1` (sur le runner Windows, avec Windows PowerShell 5.1) ;
+   - `uv sync --extra cpu`, `pytest` ;
    - démarrage du serveur puis appel de `/health` (test de fumée) ;
    - les tests qui chargent PaddleOCR sont marqués `@pytest.mark.ocr` et utilisent un cache des modèles (`actions/cache`) ; ils tournent sur la CI à partir du jalon 2 ;
    - Ollama n'est jamais appelé en CI (client simulé).
+   Vérifications statiques dans un workflow séparé, `quality-checks.yml` (mêmes déclencheurs), sans dépendances lourdes : `ruff check` et `ruff format --check` (outils de dev seuls, `uv sync --only-dev`), syntaxe des scripts de l'extension (`node --check`), fichiers référencés par `manifest.json` et `web-ext lint` (erreurs seulement : l'avertissement sur `background.service_worker`, ignoré par Firefox, est attendu), syntaxe des scripts `.ps1` (runner Windows, Windows PowerShell 5.1).
    Le GPU, la vitesse réelle et le site de Naver ne sont pas testables en CI : ils restent couverts par les vérifications manuelles de chaque jalon.
 
 Les mesures de performance du jalon 4 se font sur le PC Windows, qui a le GPU.
@@ -447,6 +447,18 @@ Ordre choisi : d'abord l'hygiène (cache borné, mesures), puis la retraduction,
     - Taille : un épisode fait environ 100 à 200 bulles, qui tiennent dans `num_ctx = 16384`. **À mesurer** sur un vrai épisode. Si elles ne tiennent pas, on résume par tranches puis on résume les résumés.
     - Tests : ordre des bulles dans le prompt, résumé en cache (un seul appel au client simulé), 404 sans bulles, mention « lu en partie ». e2e : encart affiché à l'ouverture de l'épisode suivant.
     - Critère (Windows) : après la lecture d'un épisode, l'ouverture du suivant montre un résumé fidèle (relecture humaine).
+
+    **Réalisation :**
+
+    - Vérifié sur la vraie page (729047/66) : `window.__state__` contient `prevArticle: { no: '65', blindInspection: false }`. L'extension le lit comme `nextArticle` ; script d'état sans `prevArticle` : premier épisode, pas d'encart ; pas de script d'état du tout : `no - 1`.
+    - Mesuré sur 729047/66 (cache Ubuntu) : 81 images, 107 bulles, 3 400 caractères traduits, de l'ordre de 1 000 jetons : large marge sous `num_ctx = 16384`. Le découpage par tranches existe quand même (`[summary] chunk_chars`, 20 000 caractères par défaut, sans couper une image), puis un résumé des résumés.
+    - Seules les **traductions** partent au modèle (pas le coréen), numérotées par image (`Image n :`) : c'est ce que le lecteur a lu, et le prompt est deux fois plus court. Sortie JSON `{"summary": …}`, une nouvelle tentative si elle est invalide ou vide, puis 502. Module `summary.py`, `SUMMARY_VERSION = "1"` (indépendant de `PROMPT_VERSION`). Réglages `[summary]` : `num_ctx`, `timeout_s`, `chunk_chars`.
+    - Bulles : celles du modèle demandé ; à défaut (épisode lu avec un autre modèle), celles du modèle qui a traduit le plus d'images de l'épisode. Corrections appliquées, une seule version du prompt par image (la plus récente).
+    - « Lu en partie » : trou dans les index des images en cache, ou moins d'images que `image_count`, envoyé par l'extension (longueur de l'épisode à la fin de la lecture ; à l'ouverture du suivant, compté dans la page de l'épisode précédent, téléchargée sans cookies comme pour le préchargement).
+    - Table `summary` (série, épisode, langue, modèle → texte, version, empreinte des bulles résumées, `partial`, nombres d'images et de bulles). Le résumé est refait si la version ou l'empreinte change (images traduites depuis, correction, retraduction), ou si `image_count` contredit `partial`. Ni `DELETE /cache` ni la purge n'y touchent : plus aucune bulle en cache, le résumé gardé reste servi. Compté dans `/stats` (`summaries`) et le popup.
+    - File de traduction, clé `summary:…:<empreinte>` : la demande « background » de fin de lecture et la demande « prefetch » de l'ouverture se rejoignent, la seconde fait passer la tâche devant.
+    - Extension : déclencheur de fin de lecture = épisode entièrement traduit et 80 % atteints, dans les deux modes (pas seulement « episode » comme le préchargement), une fois par épisode, réponse ignorée. À l'ouverture : délai dépassé → nouvelle demande (2 fois au plus) ; serveur arrêté ou pas prêt → redemandé à la reprise de la file ; 404 → pas d'encart. Encart `<details class="phy-previously">` inséré avant `#sectionContWide`, dans le flux (les calques des bulles suivent via le `ResizeObserver`), ignoré par le `MutationObserver`, clics arrêtés. Réglage `summary` (défaut : activé) appliqué à chaud.
+    - Tests : `test_summary.py` (ordre de lecture, traductions seules, cache, 404, lu en partie par `image_count` et par trou, résumé refait quand les bulles changent, gardé sans `image_count`, corrections, survie à `DELETE /cache`, autre modèle, jeton, réponse vide → 502, tranches). e2e : résumé calculé en fin de lecture puis affiché à l'ouverture du suivant sans rappeler Ollama, sans recouvrir la première image, repli et fermeture ; épisode lu en partie ; option du popup.
 
 16. *Hors périmètre pour le moment* (décision du 2026-11-24) : « Brouillon rapide, puis version améliorée ». Le cahier des charges complet est conservé en section 10, pour une reprise éventuelle.
 
