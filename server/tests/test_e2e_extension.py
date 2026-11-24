@@ -1,4 +1,4 @@
-"""Tests de bout en bout de l'extension (jalon 7).
+"""Tests de bout en bout de l'extension (jalons 7 et 8).
 
 Chromium (Playwright) charge l'extension non empaquetée, ouvre une fausse page d'épisode
 Naver et parle à un vrai serveur Phylactère lancé dans un thread, dont l'OCR, Ollama et le
@@ -8,6 +8,9 @@ comic.naver.com et les images de image-comic.pstatic.net.
 Exclus par défaut (marqueur ``e2e``). Lancement :
     uv run playwright install chromium     # une fois
     uv run pytest -m e2e
+
+Les tests communs tournent dans les deux modes de traduction (jalon 8) : « episode » (tout
+l'épisode dès l'ouverture) et « scroll » (images visibles et ``lookahead`` suivantes).
 
 Firefox n'est pas couvert : Playwright ne sait pas y charger une extension.
 """
@@ -45,6 +48,8 @@ LINE_X, LINE_Y, LINE_W, LINE_H = 100, 400, 200, 30
 PAD = 6  # même marge que content.js
 URL_RE = re.compile(r"/webtoon/(\d+)/(\d+)/img_(\d+)\.png$")
 BUBBLE = ".phy-layer .phy-bubble"
+BADGE = ".phy-badge"
+MODES = pytest.mark.parametrize("mode", ["episode", "scroll"])
 
 
 def image_url(episode: int, index: int) -> str:
@@ -251,10 +256,19 @@ def serve_image(route) -> None:
     route.fulfill(content_type="image/png", body=image_png(int(match[2]), int(match[3])))
 
 
-def configure(worker, port: int, token: str) -> None:
-    worker.evaluate(
-        "s => chrome.storage.local.set(s)",
-        {"serverUrl": f"http://127.0.0.1:{port}", "token": token, "enabled": True},
+def set_storage(worker, **values) -> None:
+    """Écrit des réglages comme le ferait le popup."""
+    worker.evaluate("s => chrome.storage.local.set(s)", values)
+
+
+def configure(worker, port: int, token: str, mode: str = "episode", lookahead: int = 4) -> None:
+    set_storage(
+        worker,
+        serverUrl=f"http://127.0.0.1:{port}",
+        token=token,
+        enabled=True,
+        translateMode=mode,
+        lookahead=lookahead,
     )
 
 
@@ -268,10 +282,11 @@ def bubble_on(page, episode: int, index: int):
     return page.locator(BUBBLE, has_text=expected_text(episode, index))
 
 
-def test_bubble_is_placed_over_its_image(browser, server):
+@MODES
+def test_bubble_is_placed_over_its_image(browser, server, mode):
     context, worker = browser
     server.start()
-    configure(worker, server.port, server.token)
+    configure(worker, server.port, server.token, mode)
     page = open_episode(context)
 
     bubble = bubble_on(page, 66, 0)
@@ -295,6 +310,7 @@ def test_visible_first_then_prefetch_with_at_most_three_requests(browser, server
     page = open_episode(context)
 
     expect(bubble_on(page, 66, 0)).to_be_visible(timeout=15_000)
+    expect(page.locator(BADGE)).to_contain_text("en cours")
     # Les 3 premières requêtes partent ensemble (leur ordre d'arrivée au serveur varie) :
     # l'image visible, puis le préchargement dans l'ordre de lecture.
     assert set(world.requests_for(66)[:3]) == {(0, "visible"), (1, "prefetch"), (2, "prefetch")}
@@ -313,10 +329,74 @@ def test_visible_first_then_prefetch_with_at_most_three_requests(browser, server
     )
 
 
-def test_server_down_then_started(browser, world):
+def requested(world, episode: int = 66) -> set[int]:
+    return {index for index, _ in world.requests_for(episode)}
+
+
+def test_scroll_mode_follows_the_reading_window(browser, server, world):
+    """Mode « scroll » : seulement les images visibles et les `lookahead` suivantes ; un saut
+    en fin d'épisode ne traite pas ce qui précède ; les images dépassées attendent d'être
+    revues."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=2)
+    page = open_episode(context)
+    badge = page.locator(BADGE)
+
+    # À l'ouverture, seule l'image 0 est visible : fenêtre 0 à 2.
+    expect(page.locator(BUBBLE)).to_have_count(3, timeout=15_000)
+    expect(badge).to_have_text("Phylactère · Traduit · 3/12 · en attente du défilement")
+    assert requested(world) == {0, 1, 2}
+    assert (0, "visible") in world.requests_for(66)
+
+    # Saut vers l'image 10 (centrée : seule visible) : fenêtre 10 à 12, 3 à 9 sautées.
+    page.locator("#content_image_10").scroll_into_view_if_needed()
+    expect(bubble_on(page, 66, 11)).to_be_visible(timeout=15_000)
+    expect(badge).to_have_text("Phylactère · Traduit · 5/12 · en attente du défilement")
+    assert requested(world) == {0, 1, 2, 10, 11}
+    assert (10, "visible") in world.requests_for(66)
+
+    # Retour en arrière : une image dépassée est traduite quand elle redevient visible.
+    page.locator("#content_image_5").scroll_into_view_if_needed()
+    expect(bubble_on(page, 66, 5)).to_be_visible(timeout=15_000)
+    assert (5, "visible") in world.requests_for(66)
+    expect(badge).to_have_text("Phylactère · Traduit · 8/12 · en attente du défilement")
+    assert requested(world) == {0, 1, 2, 5, 6, 7, 10, 11}  # fenêtre 5 à 7
+
+
+def test_mode_change_applies_without_reload(browser, server, world):
+    """« scroll » → « episode » relance le préchargement, sans retraduire ce qui est fait."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    page = open_episode(context)
+    badge = page.locator(BADGE)
+    expect(badge).to_have_text(
+        "Phylactère · Traduit · 2/12 · en attente du défilement", timeout=15_000
+    )
+    assert requested(world) == {0, 1}
+
+    # Avance augmentée à chaud : la fenêtre s'élargit.
+    set_storage(worker, lookahead=3)
+    expect(badge).to_have_text(
+        "Phylactère · Traduit · 4/12 · en attente du défilement", timeout=15_000
+    )
+    assert requested(world) == {0, 1, 2, 3}
+
+    set_storage(worker, translateMode="episode")
+    expect(badge).to_have_text(
+        f"Phylactère · Traduit · {IMAGE_COUNT}/{IMAGE_COUNT}", timeout=30_000
+    )
+    # Pas de remise à zéro : chaque image n'est demandée qu'une fois.
+    indices = [index for index, _ in world.requests_for(66)]
+    assert sorted(indices) == list(range(IMAGE_COUNT))
+
+
+@MODES
+def test_server_down_then_started(browser, world, mode):
     context, worker = browser
     live = LiveServer(world, free_port())
-    configure(worker, live.port, live.token)
+    configure(worker, live.port, live.token, mode)
     page = open_episode(context)
     try:
         expect(page.locator(".phy-badge")).to_have_text(
@@ -329,26 +409,28 @@ def test_server_down_then_started(browser, world):
         live.stop()
 
 
-def test_refused_token_then_fixed(browser, server):
+@MODES
+def test_refused_token_then_fixed(browser, server, mode):
     context, worker = browser
     server.start()
-    configure(worker, server.port, "jeton-faux")
+    configure(worker, server.port, "jeton-faux", mode)
     page = open_episode(context)
 
     badge = page.locator(".phy-badge")
     expect(badge).to_have_text("Phylactère · Jeton à saisir dans le popup", timeout=10_000)
     assert page.locator(BUBBLE).count() == 0
 
-    configure(worker, server.port, server.token)  # comme une saisie dans le popup
+    configure(worker, server.port, server.token, mode)  # comme une saisie dans le popup
     expect(bubble_on(page, 66, 0)).to_be_visible(timeout=15_000)
 
 
-def test_episode_change_without_reload(browser, server, world):
+@MODES
+def test_episode_change_without_reload(browser, server, world, mode):
     """La page réutilise ses <img> : seul leur src change (currentSrc garde l'ancienne
     URL tant que la nouvelle image n'est pas chargée)."""
     context, worker = browser
     server.start()
-    configure(worker, server.port, server.token)
+    configure(worker, server.port, server.token, mode)
     page = open_episode(context)
     expect(bubble_on(page, 66, 0)).to_be_visible(timeout=15_000)
 
@@ -361,10 +443,11 @@ def test_episode_change_without_reload(browser, server, world):
     assert (0, "prefetch") not in world.requests_for(67)
 
 
-def test_alt_t_and_click_on_bubble(browser, server):
+@MODES
+def test_alt_t_and_click_on_bubble(browser, server, mode):
     context, worker = browser
     server.start()
-    configure(worker, server.port, server.token)
+    configure(worker, server.port, server.token, mode)
     page = open_episode(context)
     bubble = bubble_on(page, 66, 0)
     expect(bubble).to_be_visible(timeout=15_000)
@@ -381,3 +464,24 @@ def test_alt_t_and_click_on_bubble(browser, server):
     expect(page.locator(".phy-badge")).to_contain_text("Original")
     page.keyboard.press("Alt+KeyT")
     expect(page.locator(".phy-layer").first).not_to_have_class(re.compile(r"\bphy-hidden\b"))
+
+
+def test_popup_saves_translate_mode(browser):
+    """Le popup enregistre le mode et l'avance dès leur changement (avance bornée à 1-20)."""
+    context, worker = browser
+    extension_id = worker.url.split("/")[2]
+    page = context.new_page()
+    page.goto(f"chrome-extension://{extension_id}/popup.html")
+    expect(page.locator("#translateMode")).to_have_value("episode")
+    expect(page.locator("#lookaheadRow")).to_be_hidden()
+
+    page.select_option("#translateMode", "scroll")
+    expect(page.locator("#lookaheadRow")).to_be_visible()
+    expect(page.locator("#lookahead")).to_have_value("4")
+    page.fill("#lookahead", "50")
+    page.locator("#lookahead").dispatch_event("change")
+    expect(page.locator("#lookahead")).to_have_value("20")
+    expect(page.locator("#status")).to_have_text("20 image(s) d’avance.")  # après l'écriture
+
+    stored = worker.evaluate("() => chrome.storage.local.get(['translateMode', 'lookahead'])")
+    assert stored == {"translateMode": "scroll", "lookahead": 20}

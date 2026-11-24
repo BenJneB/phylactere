@@ -28,6 +28,8 @@
   let enabled = true;
   let hidden = false;
   let targetLang = "fr";
+  let translateMode = DEFAULTS.translateMode;
+  let lookahead = DEFAULTS.lookahead;
   let lastHref = location.href;
 
   // --- Badge d'état ---
@@ -38,6 +40,8 @@
   chrome.storage.local.get(DEFAULTS).then((s) => {
     enabled = s.enabled;
     targetLang = s.targetLang;
+    translateMode = s.translateMode;
+    lookahead = clampLookahead(s.lookahead);
     reset();
   });
 
@@ -45,8 +49,13 @@
     if (area !== "local") return;
     if (changes.enabled) enabled = changes.enabled.newValue;
     if (changes.targetLang) targetLang = changes.targetLang.newValue;
-    // Tout réglage (serveur, jeton, langue, modèle) relance la traduction de la page.
-    if (Object.keys(DEFAULTS).some((k) => k in changes)) reset();
+    if (changes.translateMode) translateMode = changes.translateMode.newValue ?? DEFAULTS.translateMode;
+    if (changes.lookahead) lookahead = clampLookahead(changes.lookahead.newValue);
+    // Serveur, jeton, langue, modèle, activation : on retraduit la page.
+    if (Object.keys(DEFAULTS).some((k) => k in changes && !LIVE_SETTINGS.includes(k))) reset();
+    // Mode et avance : la fenêtre de lecture change, la file repart (en passant au mode
+    // « episode », le préchargement du reste de l'épisode reprend).
+    else if (LIVE_SETTINGS.some((k) => k in changes)) pump();
   });
 
   document.addEventListener("keydown", (e) => {
@@ -134,12 +143,31 @@
 
   // --- File d'attente ---
 
+  // Fenêtre de lecture du mode « scroll » : { from, to } (index inclus), ou null en mode
+  // « episode » (pas de limite). De la première image visible à la dernière visible +
+  // `lookahead`. Sans image visible (en-tête de la page encore à l'écran), les `lookahead`
+  // premières images situées sous l'écran ; si toutes sont au-dessus (commentaires), aucune.
+  function readingWindow() {
+    if (translateMode !== "scroll") return null;
+    const visible = order.filter((e) => e.visible);
+    if (visible.length) {
+      return { from: visible[0].index, to: visible[visible.length - 1].index + lookahead };
+    }
+    const below = order.find((e) => e.img.isConnected && e.img.getBoundingClientRect().top >= 0);
+    return below ? { from: below.index, to: below.index + lookahead - 1 } : { from: 0, to: -1 };
+  }
+
+  const inWindow = (e, win) => !win || (e.index >= win.from && e.index <= win.to);
+
   function nextEntry() {
     // Une image dont on ne sait pas encore si elle est visible attend le premier rappel de
     // l'IntersectionObserver : sinon, à l'ouverture, l'image visible partait en
     // « prefetch » puis devait être renvoyée en « visible ».
     if (order.some((e) => e.visible === null)) return null;
-    const queued = order.filter((e) => e.status === "queued");
+    // Mode « scroll » : les images hors de la fenêtre attendent le défilement (celles déjà
+    // dépassées ne repartent que si elles redeviennent visibles).
+    const win = readingWindow();
+    const queued = order.filter((e) => e.status === "queued" && inWindow(e, win));
     if (!queued.length) return null;
     const visible = queued.find((e) => e.visible);
     if (visible) return visible;
@@ -402,14 +430,25 @@
       return;
     }
     if (!badge.isConnected) document.body.appendChild(badge);
-    let done = 0, errors = 0, lastError = "";
+    const win = readingWindow();
+    let done = 0, errors = 0, lastError = "", working = 0, waiting = 0;
     for (const e of order) {
       if (e.status === "done") done++;
       if (e.status === "error") { errors++; lastError = e.error; }
+      if (e.status === "working" || (e.status === "queued" && inWindow(e, win))) working++;
+      if (e.status === "queued" && !inWindow(e, win)) waiting++;
     }
     let text = `${hidden ? "Original" : "Traduit"} · ${done}/${order.length}`;
     let title = HINT;
     let state = "";
+    // Mode « scroll » : une image non traduite plus bas n'est pas une panne.
+    if (working) {
+      text += " · en cours";
+    } else if (waiting) {
+      text += " · en attente du défilement";
+      title = `Mode défilement : ${waiting} image(s) seront traduites à l'approche ` +
+        `(${lookahead} d'avance).\n${HINT}`;
+    }
     if (pause?.kind === "down") {
       text = "Serveur arrêté";
       title = `${pause.error}\nNouvel essai toutes les 5 s.\n${HINT}`;
