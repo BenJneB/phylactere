@@ -231,10 +231,13 @@ class OllamaTranslator:
         model: str,
         schema: dict = RESPONSE_SCHEMA,
         num_ctx: int = 0,
+        timeout_s: float = 0,
     ) -> str:
         """Une requête /api/chat avec sortie JSON imposée par ``schema`` ; renvoie le texte
         de la réponse (JSON à valider par l'appelant). ``num_ctx`` : taille du contexte
-        Ollama (0 = celle d'Ollama). TranslationError si Ollama échoue."""
+        Ollama (0 = celle d'Ollama). ``timeout_s`` : délai d'attente (0 = celui de la
+        section ollama). TranslationError si Ollama échoue."""
+        timeout = timeout_s or self._ollama.timeout_s
         options: dict = {"temperature": self._cfg.temperature}
         if num_ctx:
             options["num_ctx"] = num_ctx
@@ -253,20 +256,16 @@ class OllamaTranslator:
         if send_think:
             body["think"] = False
         try:
-            response = await self._client.post(
-                "/api/chat", json=body, timeout=self._ollama.timeout_s
-            )
+            response = await self._client.post("/api/chat", json=body, timeout=timeout)
         except httpx.TimeoutException as exc:
-            raise TranslationError(
-                f"Ollama n'a pas répondu en {self._ollama.timeout_s:.0f} s.", 504
-            ) from exc
+            raise TranslationError(f"Ollama n'a pas répondu en {timeout:.0f} s.", 504) from exc
         except httpx.HTTPError as exc:
             raise TranslationError(f"Ollama injoignable ({self._ollama.url}) : {exc}", 503) from exc
 
         if response.status_code == 400 and send_think and "think" in response.text:
             logger.info("Le modèle %s ne gère pas l'option think : désactivée.", model)
             self._no_think.add(model)
-            return await self.chat(system, user, model, schema, num_ctx)
+            return await self.chat(system, user, model, schema, num_ctx, timeout_s)
         if response.status_code == 404:
             raise TranslationError(
                 f"Modèle « {model} » absent d'Ollama : lance « ollama pull {model} ».", 503

@@ -11,5 +11,11 @@ log_level = "debug"
 # qwen3:1.7b ne traduit pas : il romanise le coréen. Installation : ollama pull qwen3.5:4b
 model = "qwen3.5:4b"
 
+[glossary]
+# Sur CPU, qwen3.5:4b lit le prompt à ~10 jetons/s : 200 bulles (~6 000 jetons) prendraient
+# plus de dix minutes. Moins de bulles et un délai plus long.
+suggest_bubbles = 80
+timeout_s = 1800
+
 [ocr]
 device = "cpu"

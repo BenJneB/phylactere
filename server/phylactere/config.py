@@ -58,6 +58,7 @@ class TranslationConfig(_Section):
 class GlossaryConfig(_Section):
     suggest_bubbles: int = Field(ge=1)
     num_ctx: int = Field(ge=0)
+    timeout_s: float = Field(gt=0)
 
 
 class OcrConfig(_Section):

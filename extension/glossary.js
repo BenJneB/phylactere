@@ -157,7 +157,8 @@ async function suggest() {
   $("suggest").disabled = true;
   $("suggestions").hidden = true;
   setStatus("suggestStatus", "Analyse des bulles traduites… (passe après les images en cours de traduction)", "busy");
-  const res = await send({ type: "glossary-suggest", seriesId, episodeId });
+  // Appel direct (api.js), pas via le script d'arrière-plan : voir api.js.
+  const res = await suggestGlossary(seriesId, episodeId);
   $("suggest").disabled = false;
   if (!res.ok) return setStatus("suggestStatus", res.error, "err");
   // Termes ajoutés au tableau depuis l'ouverture de la page, pas encore enregistrés.

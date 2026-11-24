@@ -284,7 +284,9 @@ class Pipeline:
         entries = await self.translation_queue.run(
             key,
             "background",
-            lambda: suggest_entries(self._translator, bubbles, glossary, lang, model, cfg.num_ctx),
+            lambda: suggest_entries(
+                self._translator, bubbles, glossary, lang, model, cfg.num_ctx, cfg.timeout_s
+            ),
         )
         logger.info(
             "Propositions de glossaire %s : %d entrée(s) en %d ms.",

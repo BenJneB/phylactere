@@ -48,6 +48,10 @@ suggest_bubbles = 200
 # traduction : 200 bulles dépassent les 4096 jetons qu'Ollama alloue par défaut aux petites
 # cartes, et le texte en trop serait coupé sans erreur. 0 = valeur par défaut d'Ollama.
 num_ctx = 16384
+# Délai d'attente d'Ollama (secondes) pour cette requête : elle lit toutes les bulles d'un
+# coup, bien plus longue qu'une traduction (timeout_s de [ollama]). Sur GPU, moins d'une
+# minute ; sur CPU, comptez une dizaine de secondes par tranche de 100 jetons du prompt.
+timeout_s = 600
 
 [ocr]
 # "auto" (GPU si PaddlePaddle GPU est installé et qu'une carte NVIDIA répond, sinon CPU),

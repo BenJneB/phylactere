@@ -156,6 +156,7 @@ async def suggest_entries(
     target_lang: str,
     model: str,
     num_ctx: int = 0,
+    timeout_s: float = 0,
 ) -> list[Suggestion]:
     """Demande des entrées au modèle ; une nouvelle tentative si la réponse est invalide,
     puis TranslationError (502)."""
@@ -163,7 +164,7 @@ async def suggest_entries(
     user = suggest_user_prompt(bubbles, glossary, target_lang)
     for attempt in (1, 2):
         try:
-            content = await translator.chat(system, user, model, SUGGEST_SCHEMA, num_ctx)
+            content = await translator.chat(system, user, model, SUGGEST_SCHEMA, num_ctx, timeout_s)
             parsed = _RawResponse.model_validate_json(content)
         except InvalidResponse as exc:
             logger.warning("Propositions, tentative %d : %s", attempt, exc)
