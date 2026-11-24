@@ -11,6 +11,8 @@ Ollama démarré et les modèles installés (ollama pull …). Depuis server/ :
     uv run --no-sync python ../scripts/bench.py "https://comic.naver.com/webtoon/detail?titleId=729047&no=66"
     uv run --no-sync python ../scripts/bench.py ../samples/729047-66 --models qwen3:4b,qwen3:8b \\
         --variants base,sans-contexte --limit 40
+    uv run --no-sync python ../scripts/bench.py ../samples/729047-66 --models qwen3.5:9b \\
+        --variants base,suivantes   # mesure du second passage (jalon 20)
 
 Résultats dans samples/bench/<série>-<épisode>/ (non versionné) : rapport-<date>.html et
 resultats-<date>.json.
@@ -48,9 +50,11 @@ from phylactere.translate import OllamaTranslator, TranslationError
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODELS = "qwen3:4b,qwen3:8b,qwen3.5:4b,gemma3:4b,translategemma:4b,exaone3.5:7.8b"
-# Variantes : contexte (bulles précédentes déjà traduites) donné au modèle ou non.
-# "base" : comportement du serveur.
-VARIANTS = {"base": True, "sans-contexte": False}
+# Variantes de prompt. "base" : comportement du serveur (bulles précédentes en contexte).
+# "sans-contexte" : aucune bulle précédente. "suivantes" : simule le second passage du
+# jalon 21 ; chaque image est retraduite avec les bulles précédentes (déjà retraduites) et
+# les bulles suivantes (traduction de "base"), qui est donc lancée avant elle.
+VARIANTS = ("base", "sans-contexte", "suivantes")
 
 
 def gpu_name() -> str:
@@ -139,38 +143,27 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
     gpu_text = f"{gpu:.0%} sur le GPU" if gpu is not None else "part GPU inconnue"
     print(f"  {model} : chargé en {load_s} s, {gpu_text}", flush=True)
 
+    first_pass: list[list[str]] | None = None
     for variant in variants:
-        use_context = VARIANTS[variant]
-        cfg = settings.translation
         calls: list[dict] = []  # statistiques Ollama de chaque requête de l'image en cours
-        translator = OllamaTranslator(client, ollama_cfg, cfg, on_stats=calls.append)
-        context: list[tuple[str, str]] = []
-        translations, times, errors, translated_indexes = [], [], [], []
-        per_image: dict[str, dict] = {}
-        for index, result in enumerate(ocr_results):
-            texts = [bubble.text for bubble in result.bubbles]
-            if not texts:
-                translations.append([])
-                continue
-            window = context[-cfg.context_size :] if use_context and cfg.context_size else []
-            calls.clear()
-            start = time.perf_counter()
-            try:
-                out = await translator.translate(texts, lang, window)
-            except TranslationError as exc:
-                errors.append({"index": index, "error": str(exc)})
-                out = [""] * len(texts)
-            times.append((time.perf_counter() - start) * 1000)
-            per_image[str(index)] = {
-                "ms": round(times[-1]),
-                "bubbles": len(texts),
-                # Plus d'une requête : réponse invalide ou incomplète, nouvelle tentative.
-                "requests": len(calls),
-                **{key: round(sum(c[key] for c in calls)) for key in STAT_KEYS},
-            }
-            translated_indexes.append(index)
-            translations.append(out)
-            context.extend(zip(texts, out, strict=True))
+        translator = OllamaTranslator(
+            client, ollama_cfg, settings.translation, on_stats=calls.append
+        )
+        texts = [[bubble.text for bubble in result.bubbles] for result in ocr_results]
+        episode = await translate_episode(
+            translator,
+            texts,
+            lang,
+            settings.translation.context_size,
+            calls,
+            use_context=variant != "sans-contexte",
+            first_pass=first_pass if variant == "suivantes" else None,
+        )
+        if variant == "base":
+            first_pass = episode["translations"]
+        times = episode["times"]
+        translated_indexes, per_image = episode["indexes"], episode["per_image"]
+        errors, translations = episode["errors"], episode["translations"]
         bubbles = sum(len(r.bubbles) for r in ocr_results)
         run = {
             "model": model,
@@ -203,6 +196,83 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
 
 
 STAT_KEYS = ("eval_count", "eval_ms", "prompt_eval_count", "prompt_eval_ms")
+
+
+def following_window(
+    texts: list[list[str]], first_pass: list[list[str]], index: int, size: int
+) -> list[tuple[str, str]]:
+    """Bulles des images qui suivent ``index``, avec leur traduction du premier passage,
+    dans l'ordre de lecture : les ``size`` premières. Les bulles que le premier passage n'a
+    pas su traduire sont sautées."""
+    window: list[tuple[str, str]] = []
+    for later in range(index + 1, len(texts)):
+        window.extend(
+            (original, translated)
+            for original, translated in zip(texts[later], first_pass[later], strict=True)
+            if translated
+        )
+        if len(window) >= size:
+            break
+    return window[:size]
+
+
+async def translate_episode(
+    translator: OllamaTranslator,
+    texts: list[list[str]],
+    lang: str,
+    context_size: int,
+    calls: list[dict],
+    use_context: bool = True,
+    first_pass: list[list[str]] | None = None,
+) -> dict:
+    """Traduit un épisode image par image, dans l'ordre de lecture, comme le serveur.
+
+    ``texts`` : textes des bulles de chaque image. ``calls`` : liste remplie par le
+    ``on_stats`` du traducteur. ``first_pass`` (variante « suivantes ») : traductions d'un
+    premier passage ; chaque image reçoit alors aussi les bulles suivantes en contexte, et
+    les bulles précédentes sont celles de ce second passage.
+    """
+    context: list[tuple[str, str]] = []
+    translations: list[list[str]] = []
+    times: list[float] = []
+    errors: list[dict] = []
+    indexes: list[int] = []
+    per_image: dict[str, dict] = {}
+    for index, image_texts in enumerate(texts):
+        if not image_texts:
+            translations.append([])
+            continue
+        window = context[-context_size:] if use_context and context_size else []
+        following = (
+            following_window(texts, first_pass, index, context_size)
+            if first_pass is not None and context_size
+            else None
+        )
+        calls.clear()
+        start = time.perf_counter()
+        try:
+            out = await translator.translate(image_texts, lang, window, following=following)
+        except TranslationError as exc:
+            errors.append({"index": index, "error": str(exc)})
+            out = [""] * len(image_texts)
+        times.append((time.perf_counter() - start) * 1000)
+        per_image[str(index)] = {
+            "ms": round(times[-1]),
+            "bubbles": len(image_texts),
+            # Plus d'une requête : réponse invalide ou incomplète, nouvelle tentative.
+            "requests": len(calls),
+            **{key: round(sum(c[key] for c in calls)) for key in STAT_KEYS},
+        }
+        indexes.append(index)
+        translations.append(out)
+        context.extend(zip(image_texts, out, strict=True))
+    return {
+        "translations": translations,
+        "times": times,
+        "errors": errors,
+        "indexes": indexes,
+        "per_image": per_image,
+    }
 
 
 def token_summary(per_image: dict[str, dict]) -> dict:
@@ -415,6 +485,9 @@ async def main() -> int:
     unknown = [v for v in variants if v not in VARIANTS]
     if unknown:
         parser.error(f"variante(s) inconnue(s) : {', '.join(unknown)}")
+    if "suivantes" in variants and "base" not in variants:
+        variants.append("base")  # premier passage dont « suivantes » a besoin
+    variants.sort(key=VARIANTS.index)  # « base » avant « suivantes »
 
     settings = load_settings()
     series_id, episode_id, urls = episode_images(args.source)

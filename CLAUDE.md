@@ -25,6 +25,8 @@ uv run python -m phylactere --check-ocr   # charge PaddleOCR et lit tests/data/k
 PHYLACTERE_CONFIG=config.dev.toml uv run python ../scripts/translate_samples.py ../samples/729047-66 --limit 20
 # Banc d'essai (jalon 4, serveur arrêté) : rapport HTML dans samples/bench/
 uv run python ../scripts/bench.py ../samples/729047-66 --models qwen3.5:4b --variants base,sans-contexte --limit 6
+# Mesure du second passage (jalon 20) : « suivantes » relance « base » d'abord si besoin
+uv run python ../scripts/bench.py ../samples/729047-66 --models qwen3.5:4b --variants base,suivantes --limit 6
 # Export PDF d'un épisode lu (cache + images retéléchargées) : ~/.local/share/phylactere/exports/
 uv run python ../scripts/export.py 729047 66 --open
 # Rapport HTML des bulles signalées (Alt+clic) et corrigées (Ctrl+clic) : ~/.local/share/phylactere/reports/index.html
