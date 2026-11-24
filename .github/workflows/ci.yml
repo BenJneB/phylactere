@@ -105,3 +105,27 @@ jobs:
             & taskkill /PID $server.Id /T /F | Out-Null
           }
           if (-not $ok) { Write-Host 'Le serveur ne répond pas sur /health.'; exit 1 }
+
+  extension:
+    name: Extension (Chromium, Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: server/uv.lock
+
+      - name: Dépendances
+        run: uv sync --locked --extra cpu
+
+      - name: Chromium
+        run: uv run --no-sync playwright install --with-deps --no-shell chromium
+
+      - name: Tests de bout en bout
+        run: uv run --no-sync pytest -m e2e

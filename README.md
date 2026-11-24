@@ -212,4 +212,4 @@ Usage personnel : les webtoons restent la propriété de leurs auteurs, ne redis
 
 ## Développement
 
-Le cahier des charges et les décisions techniques sont dans `docs/SPEC.md`. Le développement se fait sur Ubuntu (`scripts/start.sh`, tests `uv run pytest` dans `server`), l'utilisation sur Windows.
+Le cahier des charges et les décisions techniques sont dans `docs/SPEC.md`. Le développement se fait sur Ubuntu (`scripts/start.sh`, tests `uv run pytest` dans `server`), l'utilisation sur Windows. Les tests de bout en bout de l'extension (Chromium piloté par Playwright) sont exclus par défaut : `uv run playwright install chromium` une fois, puis `uv run pytest -m e2e` (voir `extension/README.md`).
