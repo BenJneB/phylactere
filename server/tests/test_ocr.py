@@ -29,6 +29,7 @@ OCR = OcrConfig(
     neighbor_margin=400,
     bg_margin=6,
     bg_min_share=0.6,
+    bg_text_share=0.7,
 )
 
 

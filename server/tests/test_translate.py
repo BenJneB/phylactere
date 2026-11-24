@@ -149,6 +149,27 @@ def test_ollama_timeout():
     assert info.value.status_code == 504
 
 
+def test_chat_timeout_overrides_ollama_default():
+    timeouts = []
+
+    def slow(request):
+        timeouts.append(request.extensions["timeout"]["read"])
+        raise httpx.ReadTimeout("trop long", request=request)
+
+    async def go(**kwargs):
+        async with httpx.AsyncClient(
+            base_url="http://ollama", transport=httpx.MockTransport(slow)
+        ) as client:
+            translator = OllamaTranslator(client, SETTINGS.ollama, SETTINGS.translation)
+            return await translator.chat("s", "u", "m", **kwargs)
+
+    with pytest.raises(TranslationError, match="1234 s"):
+        asyncio.run(go(timeout_s=1234))
+    with pytest.raises(TranslationError):
+        asyncio.run(go())
+    assert timeouts == [1234, SETTINGS.ollama.timeout_s]
+
+
 def test_context_and_glossary_reach_the_prompt():
     fake = FakeOllama({1: "Salut"})
     translate(

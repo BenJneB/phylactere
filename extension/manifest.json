@@ -3,6 +3,12 @@
   "name": "Phylactère",
   "version": "2.0.0",
   "description": "Traduit en temps réel les bulles des webtoons de comic.naver.com, avec un serveur local (OCR et LLM sur votre PC).",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": ["storage"],
   "host_permissions": [
     "https://comic.naver.com/*",
@@ -11,7 +17,7 @@
   ],
   "background": {
     "service_worker": "background.js",
-    "scripts": ["defaults.js", "background.js"]
+    "scripts": ["defaults.js", "api.js", "background.js"]
   },
   "content_scripts": [
     {
@@ -23,6 +29,10 @@
   ],
   "action": {
     "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    },
     "default_title": "Phylactère"
   },
   "browser_specific_settings": {

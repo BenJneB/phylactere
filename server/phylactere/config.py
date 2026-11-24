@@ -55,6 +55,12 @@ class TranslationConfig(_Section):
     examples: bool
 
 
+class GlossaryConfig(_Section):
+    suggest_bubbles: int = Field(ge=1)
+    num_ctx: int = Field(ge=0)
+    timeout_s: float = Field(gt=0)
+
+
 class OcrConfig(_Section):
     device: Literal["auto", "gpu", "cpu"]
     detection_model: str
@@ -67,6 +73,7 @@ class OcrConfig(_Section):
     neighbor_margin: int = Field(ge=0)
     bg_margin: int = Field(ge=0)
     bg_min_share: float = Field(gt=0, le=1)
+    bg_text_share: float = Field(gt=0, le=1)
 
     @field_validator("recognition_model")
     @classmethod
@@ -105,6 +112,7 @@ class Settings(_Section):
     server: ServerConfig
     ollama: OllamaConfig
     translation: TranslationConfig
+    glossary: GlossaryConfig
     ocr: OcrConfig
     grouping: GroupingConfig
     cache: CacheConfig

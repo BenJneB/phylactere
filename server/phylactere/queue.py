@@ -1,8 +1,9 @@
 """Files à priorité (voir docs/SPEC.md, section 5.6).
 
 Une file par ressource lente (OCR, traduction), traitée par un seul worker : les
-images visibles passent avant celles préchargées, et deux demandes identiques en cours
-sont fusionnées (elles attendent le même résultat).
+images visibles passent avant celles préchargées, puis les tâches de fond (propositions de
+glossaire, jalon 10), et deux demandes identiques en cours sont fusionnées (elles
+attendent le même résultat).
 """
 
 import asyncio
@@ -13,8 +14,11 @@ from typing import Any, Literal
 
 logger = logging.getLogger("phylactere.queue")
 
-Priority = Literal["visible", "prefetch"]
-PRIORITY_ORDER: dict[str, int] = {"visible": 0, "prefetch": 1}
+# Priorités qu'un client peut demander pour une image.
+ImagePriority = Literal["visible", "prefetch"]
+# « background » : tâche interne au serveur, servie après toutes les images.
+Priority = Literal["visible", "prefetch", "background"]
+PRIORITY_ORDER: dict[str, int] = {"visible": 0, "prefetch": 1, "background": 2}
 
 
 class PriorityRunner:
