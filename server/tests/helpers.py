@@ -1,9 +1,19 @@
 """Outils communs aux tests."""
 
+from io import BytesIO
+
+from PIL import Image
+
 from phylactere.config import GroupingConfig
 from phylactere.schemas import Box, Line
 
 GROUPING = GroupingConfig(max_vertical_gap=0.8, min_horizontal_overlap=0.3, max_center_offset=0.6)
+
+
+def png_bytes(size: tuple[int, int] = (690, 600), color: str = "white") -> bytes:
+    out = BytesIO()
+    Image.new("RGB", size, color).save(out, format="PNG")
+    return out.getvalue()
 
 
 def line(x: int, y: int, w: int, h: int = 30, text: str = "가", score: float = 0.9) -> Line:

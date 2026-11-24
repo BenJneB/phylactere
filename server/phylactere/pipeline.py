@@ -5,7 +5,6 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from typing import Literal
 
 import httpx
 from PIL import Image
@@ -15,8 +14,8 @@ from phylactere.cache import Cache, TranslatedBlock, TranslationResult, sha1
 from phylactere.config import Settings
 from phylactere.fetch import FetchError, check_url, decode_image, fetch_bytes
 from phylactere.ocr import OcrEngine
-from phylactere.queue import PriorityRunner
-from phylactere.schemas import ImageSize, OcrResult
+from phylactere.queue import Priority, PriorityRunner
+from phylactere.schemas import OcrResult
 from phylactere.translate import OllamaTranslator, prompt_id
 
 logger = logging.getLogger("phylactere.pipeline")
@@ -31,7 +30,7 @@ class TranslateRequest(BaseModel):
     series_id: str = Field(min_length=1, max_length=64)
     episode_id: str = Field(min_length=1, max_length=64)
     index: int = Field(ge=0)
-    priority: Literal["visible", "prefetch"] = "visible"
+    priority: Priority = "visible"
     # Modèle Ollama choisi dans l'extension (défaut : celui de la configuration).
     model: str | None = Field(default=None, min_length=1, max_length=100)
     # Images voisines dans l'épisode : permettent de lire les bulles coupées entre deux images.
@@ -39,9 +38,7 @@ class TranslateRequest(BaseModel):
     next_image_url: str | None = None
 
 
-class TranslateResponse(BaseModel):
-    blocks: list[TranslatedBlock]
-    image_size: ImageSize
+class TranslateResponse(TranslationResult):
     cached: bool
     timings_ms: dict[str, int]
 
@@ -57,6 +54,26 @@ def ocr_fingerprint(settings: Settings) -> str:
 
 def _ms(start: float) -> int:
     return round((time.perf_counter() - start) * 1000)
+
+
+def decode_images(
+    data: bytes, previous: bytes | None, following: bytes | None
+) -> tuple[Image.Image, Image.Image | None, Image.Image | None]:
+    """Décode l'image (FetchError si illisible) et ses voisines (ignorées si illisibles).
+
+    Décodage complet d'un JPEG : à appeler hors de la boucle asyncio.
+    """
+
+    def neighbor(raw: bytes | None) -> Image.Image | None:
+        if raw is None:
+            return None
+        try:
+            return decode_image(raw)
+        except FetchError as exc:
+            logger.warning("Voisine ignorée : %s", exc)
+            return None
+
+    return decode_image(data), neighbor(previous), neighbor(following)
 
 
 class Pipeline:
@@ -89,7 +106,7 @@ class Pipeline:
 
     # --- Téléchargement (mémoire + fusion des téléchargements simultanés) ---
 
-    async def _download(self, url: str) -> bytes:
+    async def download(self, url: str) -> bytes:
         if url in self._memory:
             self._memory.move_to_end(url)
             return self._memory[url]
@@ -105,18 +122,22 @@ class Pipeline:
             self._memory.popitem(last=False)
         return data
 
-    async def _image(self, url: str) -> Image.Image:
-        return decode_image(await self._download(url))
-
-    async def _neighbor(self, url: str | None) -> Image.Image | None:
+    async def download_neighbor(self, url: str | None) -> bytes | None:
         """Une voisine illisible n'empêche pas de traiter l'image : on s'en passe."""
         if url is None:
             return None
         try:
-            return await self._image(url)
+            return await self.download(url)
         except FetchError as exc:
             logger.warning("Voisine ignorée (%s) : %s", url, exc)
             return None
+
+    async def recognize(
+        self, data: bytes, previous: bytes | None, following: bytes | None
+    ) -> OcrResult:
+        """Décode les images dans un thread, puis les lit avec l'OCR."""
+        images = await asyncio.to_thread(decode_images, data, previous, following)
+        return await self._ocr.recognize(*images)
 
     # --- OCR ---
 
@@ -136,17 +157,17 @@ class Pipeline:
             return cached
 
         start = time.perf_counter()
-        image, previous, following = await asyncio.gather(
-            self._image(request.image_url),
-            self._neighbor(request.prev_image_url),
-            self._neighbor(request.next_image_url),
+        data = await asyncio.gather(
+            self.download(request.image_url),
+            self.download_neighbor(request.prev_image_url),
+            self.download_neighbor(request.next_image_url),
         )
         timings["fetch"] = _ms(start)
 
+        # Décodage dans la tâche de la file : une demande fusionnée avec une autre ne
+        # décode rien, et la tâche en attente ne garde que les octets.
         start = time.perf_counter()
-        result = await self.ocr_queue.run(
-            key, request.priority, lambda: self._ocr.recognize(image, previous, following)
-        )
+        result = await self.ocr_queue.run(key, request.priority, lambda: self.recognize(*data))
         timings["ocr"] = _ms(start)
         await self._cache.put_ocr(key, request.series_id, result)
         return result
@@ -165,9 +186,7 @@ class Pipeline:
 
         cached = await self._cache.get_translation(key)
         if cached is not None:
-            return TranslateResponse(
-                blocks=cached.blocks, image_size=cached.image_size, cached=True, timings_ms=timings
-            )
+            return TranslateResponse(**dict(cached), cached=True, timings_ms=timings)
 
         ocr = await self._ocr_result(request, timings)
         texts = [bubble.text for bubble in ocr.bubbles]
@@ -181,7 +200,7 @@ class Pipeline:
                 request.index,
                 lang,
                 model,
-                self._settings.translation.context_size,
+                limit=self._settings.translation.context_size,
             )
             glossary = await self._cache.get_glossary(request.series_id)
             translations = await self.translation_queue.run(
@@ -211,6 +230,4 @@ class Pipeline:
             len(result.blocks),
             timings,
         )
-        return TranslateResponse(
-            blocks=result.blocks, image_size=result.image_size, cached=False, timings_ms=timings
-        )
+        return TranslateResponse(**dict(result), cached=False, timings_ms=timings)

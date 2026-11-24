@@ -65,4 +65,4 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 3 : traduction
 - [x] Jalon 4 : choix du modèle
 - [x] Jalon 5 : extension
-- [ ] Jalon 6 : finition
+- [x] Jalon 6 : finition

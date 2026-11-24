@@ -2,10 +2,10 @@ import asyncio
 
 import httpx
 import pytest
-from PIL import Image
 
 from phylactere.config import FetchConfig
 from phylactere.fetch import REFERER, FetchError, check_url, decode_image, fetch_bytes
+from tests.helpers import png_bytes
 
 CFG = FetchConfig(allowed_hosts=["image-comic.pstatic.net"], max_bytes=1000, timeout_s=15)
 URL = "https://image-comic.pstatic.net/webtoon/1/2/image.jpg"
@@ -17,14 +17,6 @@ def fetch(handler, url=URL, cfg=CFG) -> bytes:
             return await fetch_bytes(client, url, cfg)
 
     return asyncio.run(go())
-
-
-def png_bytes() -> bytes:
-    from io import BytesIO
-
-    out = BytesIO()
-    Image.new("RGB", (4, 3), "red").save(out, format="PNG")
-    return out.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -133,7 +125,7 @@ def test_connection_error():
 
 
 def test_decode_image():
-    image = decode_image(png_bytes())
+    image = decode_image(png_bytes((4, 3), "red"))
     assert image.size == (4, 3) and image.mode == "RGB"
 
 

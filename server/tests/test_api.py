@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from phylactere import __version__
 from phylactere.config import default_settings, load_settings
 from phylactere.main import TOKEN_HEADER, create_app
-from tests.helpers import FakeDetector, line
+from tests.helpers import FakeDetector, line, png_bytes
 
 TAGS = {"models": [{"name": "qwen3:1.7b"}]}
 
@@ -32,7 +32,7 @@ def make_client(handler=ollama_up, images=None, detector_factory=FakeDetector) -
 
 
 def wait_ocr(client: TestClient) -> None:
-    client.app.state.ocr._executor.submit(lambda: None).result(5)
+    client.app.state.ocr.wait_loaded(5)
 
 
 @pytest.fixture
@@ -139,16 +139,6 @@ def test_rejects_non_local_host_header():
 # --- /debug/ocr ---
 
 IMAGE_URL = "https://image-comic.pstatic.net/webtoon/1/2/a.jpg"
-
-
-def png_bytes(size=(690, 600)) -> bytes:
-    from io import BytesIO
-
-    from PIL import Image
-
-    out = BytesIO()
-    Image.new("RGB", size, "white").save(out, format="PNG")
-    return out.getvalue()
 
 
 def detector_with_bubble():

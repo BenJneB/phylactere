@@ -43,6 +43,7 @@ phylactere/
 ├─ docs/SPEC.md              ce document
 ├─ extension/                extension MV3 (JS vanilla, aucun build)
 │  ├─ manifest.json
+│  ├─ defaults.js            réglages par défaut partagés (popup, content script, arrière-plan)
 │  ├─ background.js
 │  ├─ content.js / content.css
 │  └─ popup.html / popup.js
@@ -59,6 +60,7 @@ phylactere/
 │  │  ├─ translate.py        client Ollama, prompt, parsing JSON
 │  │  ├─ glossary.py         glossaire par série
 │  │  ├─ cache.py            SQLite
+│  │  ├─ errors.py           erreurs métier → code HTTP (un seul gestionnaire)
 │  │  └─ queue.py            files de priorité OCR / traduction
 │  └─ tests/
 ├─ bench/references/         traductions de référence pour le banc d'essai (texte seul)

@@ -4,13 +4,9 @@
 // ses propres règles (CORS, accès au réseau local). Le script d'arrière-plan, lui,
 // a la permission d'hôte "http://127.0.0.1/*" déclarée dans le manifeste.
 
-const DEFAULTS = {
-  serverUrl: "http://127.0.0.1:8765",
-  token: "",
-  targetLang: "fr",
-  model: "", // vide = modèle de la configuration du serveur
-  enabled: true
-};
+// Service worker Chrome : charge DEFAULTS (Firefox le charge via background.scripts).
+if (typeof importScripts === "function") importScripts("defaults.js");
+
 const TOKEN_HEADER = "X-Phylactere-Token";
 // Le serveur attend au plus 180 s Ollama (timeout_s), plus la file d'attente.
 const TRANSLATE_TIMEOUT_MS = 280_000;
@@ -45,8 +41,10 @@ function failure(kind, error, extra = {}) {
 //     "busy"   service indisponible pour l'instant (OCR en chargement, Ollama arrêté…) :
 //              réessayer après retryAfter secondes
 //     "error"  échec propre à cette requête (URL refusée, erreur du modèle…)
-async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, auth = true } = {}) {
-  const s = await settings();
+// `onTimeout` : genre d'échec quand le délai est dépassé (un serveur lent n'est pas arrêté).
+// `s` : réglages déjà lus par l'appelant.
+async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, auth = true, onTimeout = "down", s } = {}) {
+  s ??= await settings();
   if (auth && !s.token) return failure("token", "Jeton manquant : ouvrez le popup de Phylactère.");
   const headers = {};
   if (auth) headers[TOKEN_HEADER] = s.token;
@@ -62,7 +60,7 @@ async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, au
     });
   } catch (e) {
     if (e?.name === "TimeoutError") {
-      return failure(path === "/translate" ? "error" : "down", "Le serveur ne répond pas (délai dépassé).");
+      return failure(onTimeout, "Le serveur ne répond pas (délai dépassé).");
     }
     return failure("down", `Serveur Phylactère injoignable (${s.serverUrl}). Est-il lancé ?`);
   }
@@ -81,14 +79,14 @@ async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, au
     const retryAfter = Number(response.headers.get("Retry-After")) || 5;
     return failure("busy", detail, { retryAfter });
   }
-  return failure("error", detail, { status: response.status });
+  return failure("error", detail);
 }
 
 async function translate(request) {
   const s = await settings();
   const body = { ...request, target_lang: s.targetLang };
   if (s.model) body.model = s.model;
-  return call("/translate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS });
+  return call("/translate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
 }
 
 function health() {

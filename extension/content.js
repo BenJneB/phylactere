@@ -35,7 +35,7 @@
   badge.className = "phy-badge";
   badge.addEventListener("click", toggleHidden);
 
-  chrome.storage.local.get({ enabled: true, targetLang: "fr" }).then((s) => {
+  chrome.storage.local.get(DEFAULTS).then((s) => {
     enabled = s.enabled;
     targetLang = s.targetLang;
     reset();
@@ -45,8 +45,8 @@
     if (area !== "local") return;
     if (changes.enabled) enabled = changes.enabled.newValue;
     if (changes.targetLang) targetLang = changes.targetLang.newValue;
-    // Tout réglage utile (serveur, jeton, langue, modèle) relance la traduction de la page.
-    if (["enabled", "targetLang", "model", "serverUrl", "token"].some((k) => k in changes)) reset();
+    // Tout réglage (serveur, jeton, langue, modèle) relance la traduction de la page.
+    if (Object.keys(DEFAULTS).some((k) => k in changes)) reset();
   });
 
   document.addEventListener("keydown", (e) => {
@@ -263,13 +263,11 @@
     document.body.appendChild(layer);
     e.layer = layer;
     e.lastW = undefined;
-    position(e);
+    position(e, e.img.getBoundingClientRect());
   }
 
-  // Calque en position absolue dans la page, superposé à l'image.
-  function position(e) {
-    if (!e.layer) return;
-    const r = e.img.getBoundingClientRect();
+  // Calque en position absolue dans la page, superposé à l'image (rectangle `r` déjà lu).
+  function position(e, r) {
     if (!r.width || !r.height) {
       e.layer.style.display = "none";
       return;
@@ -287,17 +285,26 @@
     }
   }
 
-  // Réduit la police jusqu'à ce que la traduction tienne dans la zone d'origine.
+  // Plus grande police (au pixel près, entre 9 px et la taille de départ) pour laquelle la
+  // traduction tient dans la zone d'origine. Recherche par dichotomie : chaque mesure de
+  // scrollHeight force un calcul de mise en page.
   function fitText(e) {
     const scale = e.layer.clientWidth / e.imageSize.w;
     for (const el of e.layer.children) {
-      const target = parseFloat(el.dataset.h) * scale;
-      let size = Math.min(22, Math.max(12, target * 0.3));
-      el.style.fontSize = size + "px";
-      while (el.scrollHeight > target * 1.1 && size > 9) {
-        size -= 1;
+      const target = parseFloat(el.dataset.h) * scale * 1.1;
+      const fits = (size) => {
         el.style.fontSize = size + "px";
+        return el.scrollHeight <= target;
+      };
+      let hi = Math.round(Math.min(22, Math.max(12, target * 0.3)));
+      if (fits(hi)) continue;
+      let lo = 9;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (fits(mid)) lo = mid;
+        else hi = mid;
       }
+      fits(lo);
     }
   }
 
@@ -307,10 +314,13 @@
     rafPending = true;
     requestAnimationFrame(() => {
       rafPending = false;
-      for (const e of entries.values()) {
-        if (e.img.isConnected) position(e);
-        else if (e.layer) e.layer.style.display = "none";
-      }
+      // Toutes les lectures d'abord, puis toutes les écritures.
+      const layers = [...entries.values()].filter((e) => e.layer);
+      const rects = layers.map((e) => e.img.isConnected ? e.img.getBoundingClientRect() : null);
+      layers.forEach((e, i) => {
+        if (rects[i]) position(e, rects[i]);
+        else e.layer.style.display = "none";
+      });
     });
   }
   addEventListener("resize", scheduleReposition);
@@ -336,13 +346,23 @@
         return;
       }
     }
-    if (muts.some((m) => m.type === "attributes" || m.addedNodes.length)) scheduleScan();
+    // Nos propres éléments (badge, calques) ne relancent rien : sans ce filtre, la mise à
+    // jour du badge déclenchait un nouveau scan, qui remettait le badge à jour, etc.
+    const external = muts.filter((m) => !isOurs(m.target) &&
+      !(m.addedNodes.length && [...m.addedNodes].every(isOurs)));
+    if (!external.length) return;
+    const addsImage = (m) => [...m.addedNodes].some((n) => n.tagName === "IMG" || n.querySelector?.("img"));
+    if (external.some((m) => m.type === "attributes" || addsImage(m))) scheduleScan();
     scheduleReposition();
   }).observe(document.documentElement, {
     childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcset", "data-src"]
   });
 
   // --- Utilitaires ---
+
+  function isOurs(node) {
+    return node === badge || !!node.closest?.(".phy-layer");
+  }
 
   // Repart de zéro : autre épisode, réglages modifiés, extension (dés)activée.
   function reset() {
@@ -396,8 +416,10 @@
       title = `${lastError}\n${HINT}`;
       state = "error";
     }
-    badge.textContent = "Phylactère · " + text;
-    badge.title = title;
-    badge.dataset.state = state;
+    // N'écrire que ce qui change : chaque écriture est une mutation du DOM.
+    text = "Phylactère · " + text;
+    if (badge.textContent !== text) badge.textContent = text;
+    if (badge.title !== title) badge.title = title;
+    if (badge.dataset.state !== state) badge.dataset.state = state;
   }
 })();

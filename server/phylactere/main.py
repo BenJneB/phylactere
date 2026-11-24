@@ -24,17 +24,19 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from phylactere import __version__
 from phylactere.cache import Cache, GlossaryEntry
 from phylactere.config import Settings, load_settings
 from phylactere.debug import render_debug
-from phylactere.fetch import FetchError, decode_image, fetch_bytes
-from phylactere.ocr import OcrEngine, OcrUnavailable
-from phylactere.pipeline import Pipeline, TranslateRequest, TranslateResponse
+from phylactere.errors import ServiceError
+from phylactere.fetch import FetchError
+from phylactere.ocr import OcrEngine
+from phylactere.pipeline import Pipeline, TranslateRequest, TranslateResponse, decode_images
 from phylactere.schemas import OcrResult
-from phylactere.translate import OllamaTranslator, TranslationError
+from phylactere.translate import OllamaTranslator
 
 TOKEN_HEADER = "X-Phylactere-Token"
 # Origines des extensions : chrome-extension://<id> (Chrome) et moz-extension://<uuid> (Firefox).
@@ -120,6 +122,12 @@ def create_app(
         allow_headers=[TOKEN_HEADER, "Content-Type"],
     )
 
+    # Téléchargement, OCR pas prêt, Ollama : un seul endroit pour le code HTTP renvoyé.
+    @app.exception_handler(ServiceError)
+    async def service_error(_request: Request, exc: ServiceError) -> JSONResponse:
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else None
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status_code, headers=headers)
+
     @app.get("/health")
     async def health(request: Request) -> Health:
         try:
@@ -154,16 +162,7 @@ def create_app(
     @protected.post("/translate")
     async def translate(request: Request, body: TranslateRequest) -> TranslateResponse:
         """OCR et traduction des bulles d'une image de l'épisode."""
-        try:
-            return await request.app.state.pipeline.translate(body)
-        except FetchError as exc:
-            raise HTTPException(exc.status_code, str(exc)) from exc
-        except OcrUnavailable as exc:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, str(exc), headers={"Retry-After": "5"}
-            ) from exc
-        except TranslationError as exc:
-            raise HTTPException(exc.status_code, str(exc)) from exc
+        return await request.app.state.pipeline.translate(body)
 
     @protected.get("/glossary/{series_id}")
     async def get_glossary(request: Request, series_id: str) -> list[GlossaryEntry]:
@@ -201,34 +200,24 @@ def create_app(
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "Fournir soit image_url, soit file (un seul)."
             )
-        try:
-            if image_url is not None:
-                data = await fetch_bytes(request.app.state.images, image_url, settings.fetch)
-            else:
-                data = await file.read(settings.fetch.max_bytes + 1)
-                if len(data) > settings.fetch.max_bytes:
-                    raise FetchError("Fichier trop volumineux.", 413)
-            image = decode_image(data)
-            neighbors = []
-            for url in (prev_image_url, next_image_url):
-                neighbor = None
-                if url:
-                    raw = await fetch_bytes(request.app.state.images, url, settings.fetch)
-                    neighbor = decode_image(raw)
-                neighbors.append(neighbor)
-        except FetchError as exc:
-            raise HTTPException(exc.status_code, str(exc)) from exc
-
-        try:
-            result = await request.app.state.ocr.recognize(image, *neighbors)
-        except OcrUnavailable as exc:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, str(exc), headers={"Retry-After": "5"}
-            ) from exc
+        # Même chargement que /translate (allowlist, mémoire, voisine illisible ignorée).
+        pipeline = request.app.state.pipeline
+        if image_url is not None:
+            data = await pipeline.download(image_url)
+        else:
+            data = await file.read(settings.fetch.max_bytes + 1)
+            if len(data) > settings.fetch.max_bytes:
+                raise FetchError("Fichier trop volumineux.", 413)
+        previous, following = await asyncio.gather(
+            pipeline.download_neighbor(prev_image_url or None),
+            pipeline.download_neighbor(next_image_url or None),
+        )
+        images = await asyncio.to_thread(decode_images, data, previous, following)
+        result = await request.app.state.ocr.recognize(*images)
 
         if output == "json":
             return result
-        return Response(render_debug(image, result), media_type="image/png")
+        return Response(render_debug(images[0], result), media_type="image/png")
 
     app.include_router(protected)
     return app

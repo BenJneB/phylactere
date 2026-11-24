@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image
 
 from phylactere.config import GroupingConfig, OcrConfig, cache_dir, user_config_path
+from phylactere.errors import ServiceError
 from phylactere.grouping import group_lines, mark_edges
 from phylactere.schemas import Box, Bubble, ImageSize, Line, OcrResult
 
@@ -30,8 +31,11 @@ HANGUL = re.compile(r"[ᄀ-ᇿ㄰-㆏가-힯]")
 OcrStatus = Literal["loading", "ready", "error"]
 
 
-class OcrUnavailable(Exception):
-    """L'OCR n'est pas prêt (chargement en cours ou échec)."""
+class OcrUnavailable(ServiceError):
+    """L'OCR n'est pas prêt (chargement en cours ou échec) : 503, réessayer dans 5 s."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, 503, retry_after=5)
 
 
 class LineDetector(Protocol):
@@ -286,6 +290,10 @@ class OcrEngine:
             self._ocr_cfg,
             self._grouping_cfg,
         )
+
+    def wait_loaded(self, timeout: float | None = None) -> None:
+        """Attend la fin du chargement du modèle, réussi ou non (tests, outils)."""
+        self._executor.submit(lambda: None).result(timeout)
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from phylactere.cache import GlossaryEntry
 from phylactere.config import OllamaConfig, TranslationConfig
+from phylactere.errors import ServiceError
 
 logger = logging.getLogger("phylactere.translate")
 
@@ -80,12 +81,8 @@ RESPONSE_SCHEMA = {
 }
 
 
-class TranslationError(Exception):
+class TranslationError(ServiceError):
     """Échec de la traduction ; ``status_code`` est le code HTTP à renvoyer au client."""
-
-    def __init__(self, message: str, status_code: int) -> None:
-        super().__init__(message)
-        self.status_code = status_code
 
 
 class _InvalidResponse(Exception):
