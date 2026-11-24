@@ -105,6 +105,9 @@ class TranslatedBlock(BaseModel):
     # avant le jalon 9 : None, l'extension garde le fond blanc.
     bg: str | None = None
     fg: str | None = None
+    # Modèle qui a produit la traduction (jalon 13 : une bulle retraduite peut venir d'un
+    # autre modèle que celui de la clé de cache) ; absent des traductions plus anciennes.
+    model: str | None = None
 
 
 class TranslationResult(BaseModel):
@@ -279,6 +282,28 @@ class Cache:
             return None
         self._touch("translation", key)
         return TranslationResult.model_validate_json(row[0])
+
+    @_threaded
+    def replace_block(self, key: str, block: TranslatedBlock) -> bool:
+        """Remplace, dans la traduction en cache ``key``, la bulle de même boîte (jalon 13).
+        False si la traduction ou la bulle n'y est plus (cache vidé, glossaire modifié ou
+        image retraduite entre-temps) : rien n'est écrit."""
+        row = self._db.execute("SELECT result FROM translation WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return False
+        result = TranslationResult.model_validate_json(row[0])
+        for i, old in enumerate(result.blocks):
+            if old.box == block.box:
+                result.blocks[i] = block
+                break
+        else:
+            return False
+        self._db.execute(
+            "UPDATE translation SET result = ?, used = ? WHERE key = ?",
+            (result.model_dump_json(), time.time(), key),
+        )
+        self._db.commit()
+        return True
 
     def glossary_version(self, series_id: str) -> int:
         """À lire avant le glossaire, puis à passer à put_translation."""

@@ -18,7 +18,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from phylactere.ocr import stack_images
-from phylactere.schemas import Box, Bubble, ImageRequest, OcrResult
+from phylactere.schemas import Box, Bubble, ImageRequest, OcrResult, match_box
 
 # Marge autour de la bulle dans la découpe (px de l'image d'origine) : un peu de dessin
 # autour aide à juger le regroupement et la lecture.
@@ -44,11 +44,8 @@ class ReportResponse(BaseModel):
 def find_bubble(ocr: OcrResult, box: Box) -> Bubble | None:
     """Bulle de l'OCR qui correspond à la boîte affichée : même boîte, sinon le plus grand
     recouvrement (résultat OCR recalculé depuis l'affichage)."""
-    for bubble in ocr.bubbles:
-        if bubble.box == box:
-            return bubble
-    best = max(ocr.bubbles, key=lambda b: b.box.intersection_area(box), default=None)
-    return best if best is not None and best.box.intersection_area(box) > 0 else None
+    index = match_box([bubble.box for bubble in ocr.bubbles], box)
+    return None if index is None else ocr.bubbles[index]
 
 
 def crop_bubble(

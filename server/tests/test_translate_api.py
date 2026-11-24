@@ -29,6 +29,8 @@ class World:
         self.ollama_down = False
         self.bubbles = bubbles
         self.detector_calls = 0
+        # Préfixe des traductions par modèle (défaut « FR ») : montre qui a traduit.
+        self.prefixes: dict[str, str] = {}
 
     def images(self, request):
         self.image_requests.append(str(request.url))
@@ -45,7 +47,10 @@ class World:
             return httpx.Response(200, json={})
         self.ollama_bodies.append(body)
         bubbles = json.loads(body["messages"][1]["content"].rsplit("\n", 1)[1])
-        content = {"translations": [{"id": b["id"], "text": f"FR:{b['texte']}"} for b in bubbles]}
+        prefix = self.prefixes.get(body["model"], "FR")
+        content = {
+            "translations": [{"id": b["id"], "text": f"{prefix}:{b['texte']}"} for b in bubbles]
+        }
         return httpx.Response(200, json={"message": {"content": json.dumps(content)}})
 
     def detector(self):
@@ -308,3 +313,114 @@ def test_stats_counts_images_cache_and_timings(client, world):
     }
     assert body["model"] == load_settings().ollama.model
     assert body["uptime_s"] >= 0
+
+
+# --- Retraduction (jalon 13) ---
+
+
+def default_model() -> str:
+    # Lu à chaque test : la configuration dépend du dossier de test (conftest).
+    return load_settings().ollama.model
+
+
+# Boîte de la seconde bulle (« 가자 ») du détecteur simulé.
+SECOND_BOX = {"x": 100, "y": 600, "w": 200, "h": 30}
+
+
+def test_blocks_name_their_model(client):
+    blocks = client.post("/translate", json=request()).json()["blocks"]
+    assert [b["model"] for b in blocks] == [default_model()] * 2
+
+
+def test_force_translates_again_with_cached_ocr(client, world):
+    client.post("/translate", json=request())
+    world.prefixes[default_model()] = "V2"
+
+    response = client.post("/translate", json=request(force=True))
+
+    assert response.json()["cached"] is False
+    assert [b["translated"] for b in response.json()["blocks"]] == ["V2:안녕", "V2:가자"]
+    assert len(world.ollama_bodies) == 2 and world.detector_calls == 1  # OCR en cache
+    # La nouvelle traduction remplace l'ancienne dans le cache.
+    cached = client.post("/translate", json=request()).json()
+    assert cached["cached"] is True
+    assert [b["translated"] for b in cached["blocks"]] == ["V2:안녕", "V2:가자"]
+
+
+def test_force_with_retranslate_model_keeps_displayed_key(client, world):
+    world.prefixes["gros:14b"] = "GROS"
+    client.post("/translate", json=request())
+
+    client.post("/translate", json=request(force=True, retranslate_model="gros:14b"))
+
+    assert world.ollama_bodies[-1]["model"] == "gros:14b"
+    # Rangée sous la clé du modèle affiché (celui de la configuration) : retrouvée au
+    # rechargement de la page.
+    blocks = client.post("/translate", json=request()).json()["blocks"]
+    assert [(b["translated"], b["model"]) for b in blocks] == [
+        ("GROS:안녕", "gros:14b"),
+        ("GROS:가자", "gros:14b"),
+    ]
+
+
+def test_retranslate_changes_only_that_bubble(client, world):
+    client.post("/translate", json=request())
+    world.prefixes["gros:14b"] = "GROS"
+
+    response = client.post(
+        "/retranslate", json=request(box=SECOND_BOX, retranslate_model="gros:14b")
+    )
+
+    assert response.status_code == 200
+    block = response.json()
+    assert (block["original"], block["translated"], block["model"]) == (
+        "가자",
+        "GROS:가자",
+        "gros:14b",
+    )
+    assert block["box"] == SECOND_BOX and block["bg"] == "#ffffff"
+    # Une seule bulle envoyée, les autres bulles de l'image en contexte.
+    body = world.ollama_bodies[-1]
+    assert body["model"] == "gros:14b"
+    user = body["messages"][1]["content"]
+    assert "Autres bulles de la même image" in user and "안녕 → FR:안녕" in user
+    assert json.loads(user.rsplit("\n", 1)[1]) == [{"id": 1, "texte": "가자"}]
+    # Seule cette bulle a changé dans le cache, toujours sous la clé du modèle affiché.
+    cached = client.post("/translate", json=request()).json()
+    assert cached["cached"] is True
+    assert [b["translated"] for b in cached["blocks"]] == ["FR:안녕", "GROS:가자"]
+
+
+def test_retranslate_uses_previous_images_as_context(client, world):
+    client.post("/translate", json=request(index=0))
+    client.post("/translate", json=request(index=1))
+
+    client.post("/retranslate", json=request(index=1, box=SECOND_BOX))
+
+    user = world.ollama_bodies[-1]["messages"][1]["content"]
+    assert "Bulles précédentes" in user
+    assert world.ollama_bodies[-1]["model"] == default_model()  # défaut : modèle affiché
+
+
+def test_retranslate_finds_shifted_box(client, world):
+    client.post("/translate", json=request())
+    shifted = SECOND_BOX | {"x": 104, "y": 598}
+    block = client.post("/retranslate", json=request(box=shifted)).json()
+    assert block["original"] == "가자" and block["box"] == SECOND_BOX
+
+
+def test_retranslate_without_cached_translation_gives_404(client, world):
+    response = client.post("/retranslate", json=request(box=SECOND_BOX))
+    assert response.status_code == 404
+    assert world.ollama_bodies == []
+
+
+def test_retranslate_unknown_box_gives_404(client):
+    client.post("/translate", json=request())
+    far = {"x": 0, "y": 0, "w": 10, "h": 10}
+    assert client.post("/retranslate", json=request(box=far)).status_code == 404
+
+
+def test_retranslate_requires_token(client):
+    del client.headers[TOKEN_HEADER]
+    assert client.post("/retranslate", json=request(box=SECOND_BOX)).status_code == 401

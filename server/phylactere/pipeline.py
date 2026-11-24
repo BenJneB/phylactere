@@ -24,7 +24,7 @@ from phylactere.reports import (
     find_bubble,
     write_report,
 )
-from phylactere.schemas import ImageRequest, OcrResult
+from phylactere.schemas import Box, ImageRequest, OcrResult, match_box
 from phylactere.translate import PROMPT_ID, PROMPT_VERSION, OllamaTranslator
 
 logger = logging.getLogger("phylactere.pipeline")
@@ -36,8 +36,24 @@ TIMINGS_WINDOW = 50
 PHASES = ("fetch", "ocr", "translate")
 
 
-class TranslateRequest(ImageRequest):
+class RetranslateModel(BaseModel):
+    # Modèle choisi dans le popup pour retraduire (jalon 13 ; défaut : ``model``). Le
+    # résultat reste rangé sous la clé de ``model``, le modèle affiché, sinon il
+    # disparaîtrait au rechargement de la page.
+    retranslate_model: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class TranslateRequest(ImageRequest, RetranslateModel):
     priority: ImagePriority = "visible"
+    # Maj+Alt+T (jalon 13) : retraduit l'image en ignorant la traduction en cache, puis la
+    # remplace ; l'OCR en cache est réutilisé.
+    force: bool = False
+
+
+class RetranslateRequest(ImageRequest, RetranslateModel):
+    """Maj+clic sur une bulle (jalon 13) : bulle telle que l'extension l'affiche."""
+
+    box: Box
 
 
 class TranslateResponse(TranslationResult):
@@ -283,16 +299,26 @@ class Pipeline:
 
     # --- Traduction ---
 
+    @staticmethod
+    def _translation_key(image_url: str, lang: str, model: str) -> str:
+        return f"{sha1(image_url)}:{lang}:{model}:{PROMPT_ID}"
+
     async def translate(self, request: TranslateRequest) -> TranslateResponse:
         lang, model = self._check(request)
-        key = f"{sha1(request.image_url)}:{lang}:{model}:{PROMPT_ID}"
+        key = self._translation_key(request.image_url, lang, model)
         timings = {"fetch": 0, "ocr": 0, "translate": 0}
+        # Modèle qui traduit : celui de la clé, sauf pour une retraduction forcée.
+        translator_model = (request.force and request.retranslate_model) or model
+        # Une retraduction ne doit pas être fusionnée avec une traduction ordinaire en
+        # cours de la même image : elle en attendrait le résultat, sans rien retraduire.
+        task_key = f"force:{key}:{translator_model}" if request.force else key
 
-        cached = await self._cache.get_translation(key)
-        if cached is not None:
-            self._served += 1
-            self._served_cached += 1
-            return TranslateResponse(**dict(cached), cached=True, timings_ms=timings)
+        if not request.force:
+            cached = await self._cache.get_translation(key)
+            if cached is not None:
+                self._served += 1
+                self._served_cached += 1
+                return TranslateResponse(**dict(cached), cached=True, timings_ms=timings)
 
         ocr = await self._ocr_result(request, request.priority, timings)
         texts = [bubble.text for bubble in ocr.bubbles]
@@ -311,9 +337,11 @@ class Pipeline:
             )
             glossary = await self._cache.get_glossary(request.series_id)
             translations = await self.translation_queue.run(
-                key,
+                task_key,
                 request.priority,
-                lambda: self._translator.translate(texts, lang, context, glossary, model),
+                lambda: self._translator.translate(
+                    texts, lang, context, glossary, translator_model
+                ),
             )
         timings["translate"] = _ms(start)
         if texts:
@@ -325,6 +353,7 @@ class Pipeline:
                     **bubble.model_dump(exclude={"text", "lines"}),
                     original=bubble.text,
                     translated=text,
+                    model=translator_model,
                 )
                 for bubble, text in zip(ocr.bubbles, translations, strict=True)
             ],
@@ -341,15 +370,81 @@ class Pipeline:
             glossary_version,
         )
         logger.info(
-            "Image %s/%s #%d : %d bulle(s), %s",
+            "Image %s/%s #%d%s : %d bulle(s), %s",
             request.series_id,
             request.episode_id,
             request.index,
+            f" retraduite par {translator_model}" if request.force else "",
             len(result.blocks),
             timings,
         )
         self._served += 1
         return TranslateResponse(**dict(result), cached=False, timings_ms=timings)
+
+    # --- Retraduction d'une bulle (jalon 13) ---
+
+    async def retranslate(self, request: RetranslateRequest) -> TranslatedBlock:
+        """Retraduit une seule bulle de l'image, avec le contexte habituel plus les autres
+        bulles de l'image, et la remplace dans la traduction en cache. Renvoie la bulle.
+
+        La bulle est cherchée dans la traduction en cache (même recherche par boîte que
+        /report dans l'OCR) : c'est elle qu'on remplace, et elle porte déjà l'original.
+        """
+        lang, model = self._check(request)
+        translator_model = request.retranslate_model or model
+        key = self._translation_key(request.image_url, lang, model)
+        cached = await self._cache.get_translation(key)
+        if cached is None:
+            raise ServiceError(
+                "Traduction de l'image absente du cache (cache vidé ou glossaire modifié) : "
+                "rechargez la page.",
+                404,
+            )
+        index = match_box([block.box for block in cached.blocks], request.box)
+        if index is None:
+            raise ServiceError("Bulle introuvable dans la traduction en cache.", 404)
+        block = cached.blocks[index]
+        neighbors = [
+            (other.original, other.translated)
+            for i, other in enumerate(cached.blocks)
+            if i != index
+        ]
+
+        glossary_version = self._cache.glossary_version(request.series_id)
+        context = await self._cache.context(
+            request.series_id,
+            request.episode_id,
+            request.index,
+            lang,
+            model,
+            limit=self._settings.translation.context_size,
+        )
+        glossary = await self._cache.get_glossary(request.series_id)
+        start = time.perf_counter()
+        (text,) = await self.translation_queue.run(
+            f"retranslate:{key}:{index}:{translator_model}",
+            "visible",
+            lambda: self._translator.translate(
+                [block.original], lang, context, glossary, translator_model, neighbors
+            ),
+        )
+        updated = block.model_copy(update={"translated": text, "model": translator_model})
+        # Glossaire enregistré pendant la retraduction : put_glossary a pu effacer l'image,
+        # qui sera retraduite en entier avec lui ; on ne remet pas l'ancien glossaire.
+        stored = glossary_version == self._cache.glossary_version(
+            request.series_id
+        ) and await self._cache.replace_block(key, updated)
+        logger.info(
+            "Bulle %d de l'image %s/%s #%d retraduite par %s en %d ms%s.",
+            index,
+            request.series_id,
+            request.episode_id,
+            request.index,
+            translator_model,
+            _ms(start),
+            "" if stored else " (pas mise en cache : traduction de l'image modifiée)",
+        )
+        return updated
 
     # --- Propositions de glossaire ---
 

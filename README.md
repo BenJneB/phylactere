@@ -74,10 +74,11 @@ Ouvrir ensuite le popup de l'extension (icône dans la barre d'outils ; l'éping
 
 ## Utilisation
 
-Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la progression (`Traduit · 12/81 · en cours`).
+Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la progression (`Traduit · 12/81 · en cours`) ; son infobulle rappelle les raccourcis.
 
 - **Alt+T** ou clic sur le badge : afficher / masquer toutes les traductions ;
-- clic sur une bulle : la masquer pour voir l'original (re-clic pour la remettre) ; survoler une bulle affiche le texte coréen reconnu ;
+- clic sur une bulle : la masquer pour voir l'original (re-clic pour la remettre) ; survoler une bulle affiche le texte coréen reconnu et le modèle qui l'a traduite ;
+- **Maj+clic** sur une bulle : la retraduire (pointillé bleu pendant le calcul) ; **Maj+Alt+T** : retraduire toute l'image la plus visible. Le modèle utilisé est celui du popup › **Modèle pour retraduire** (par défaut, le même que pour traduire) ; la nouvelle traduction remplace l'ancienne dans le cache et reste au rechargement de la page. Avec le même modèle, la retraduction peut redonner le même texte : choisir un plus gros modèle pour un vrai second avis ;
 - **Alt+clic** sur une bulle mal lue ou mal traduite : la signaler (elle s'entoure d'un pointillé rouge) ; un second Alt+clic annule le signalement. Après un rechargement de la page, l'annulation se fait en supprimant ses deux fichiers (identifiant en bas de sa carte dans le rapport). Le serveur garde la bulle, sa traduction et une découpe de l'image dans `%LOCALAPPDATA%\phylactere\reports\` ; `uv run python ..\scripts\reports.py --open` (depuis `server\`) en fait un rapport HTML. Ces signalements servent à régler le prompt et la lecture des bulles ;
 - en mode « Tout l'épisode », une fois l'épisode traduit et la lecture passée à 80 %, l'épisode suivant est traduit en arrière-plan (badge `épisode suivant 5/81`) : il s'affiche traduit dès son ouverture. Pas de préchargement pour un épisode payant ;
 - popup : langue cible, modèle de traduction, activation de l'extension. Changer la langue ou le modèle retraduit la page (l'OCR, déjà en cache, n'est pas refait) ;

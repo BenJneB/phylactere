@@ -1,4 +1,4 @@
-"""Tests de bout en bout de l'extension (jalons 7, 8, 10 et 11).
+"""Tests de bout en bout de l'extension (jalons 7, 8, 10, 11, 12 et 13).
 
 Chromium (Playwright) charge l'extension non empaquetée, ouvre une fausse page d'épisode
 Naver et parle à un vrai serveur Phylactère lancé dans un thread, dont l'OCR, Ollama et le
@@ -50,6 +50,8 @@ URL_RE = re.compile(r"/webtoon/(\d+)/(\d+)/img_(\d+)\.png$")
 BUBBLE = ".phy-layer .phy-bubble"
 BADGE = ".phy-badge"
 MODES = pytest.mark.parametrize("mode", ["episode", "scroll"])
+# Modèle « pour retraduire » du popup (jalon 13) : ses traductions commencent par « RT: ».
+RETRANSLATE_MODEL = "gros"
 
 
 def image_url(episode: int, index: int) -> str:
@@ -160,6 +162,8 @@ class World:
         await asyncio.sleep(max((self.slow.get(b["texte"], 0) for b in bubbles), default=0))
         # Avec un glossaire, la traduction le montre : on voit l'épisode retraduit.
         prefix = "GL" if "Glossaire de la série" in user else "FR"
+        if body["model"] == RETRANSLATE_MODEL:  # retraduction (jalon 13)
+            prefix = "RT"
         content = {
             "translations": [
                 {"id": b["id"], "original": b["texte"], "text": f"{prefix}:{b['texte']}"}
@@ -331,7 +335,8 @@ def test_bubble_is_placed_over_its_image(browser, server, mode):
 
     bubble = bubble_on(page, 66, 0)
     expect(bubble).to_be_visible(timeout=15_000)
-    expect(bubble).to_have_attribute("title", "가66-0")  # survol : texte d'origine
+    # Survol : texte d'origine et modèle qui a traduit (jalon 13).
+    expect(bubble).to_have_attribute("title", re.compile(r"^가66-0\n— .+$"))
     # Fond pris sur l'image (vert foncé uni, rgb(0, 66, 0)) et texte blanc, plus lisible.
     expect(bubble).to_have_css("background-color", "rgb(0, 66, 0)")
     expect(bubble).to_have_css("color", "rgb(255, 255, 255)")
@@ -753,3 +758,55 @@ def test_no_next_episode_prefetch_in_scroll_mode(browser, server, world):
     page.locator("#content_image_11").scroll_into_view_if_needed()
     page.wait_for_timeout(1000)
     assert world.requests_for(67) == []
+
+
+# --- Jalon 13 : retraduire une bulle ou une image ---
+
+
+def test_shift_click_retranslates_bubble(browser, server, world):
+    """Maj+clic : la bulle est retraduite par le modèle « pour retraduire », et la
+    nouvelle traduction reste après rechargement ; le clic simple masque toujours."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    set_storage(worker, retranslateModel=RETRANSLATE_MODEL)
+    page = open_episode(context)
+    expect(bubble_on(page, 66, 0)).to_be_visible(timeout=15_000)
+    # Bulle de l'image 0, avant (FR:) comme après (RT:) la retraduction.
+    bubble = page.locator(BUBBLE).filter(has_text=re.compile(r":가66-0$"))
+
+    bubble.click(modifiers=["Shift"])
+    expect(bubble).to_have_text("RT:가66-0", timeout=10_000)
+    expect(bubble).not_to_have_attribute("data-retranslate", re.compile(".*"))
+    expect(bubble).to_have_attribute("title", f"가66-0\n— {RETRANSLATE_MODEL}")
+    expect(page.locator(BADGE)).to_contain_text(f"Bulle retraduite ({RETRANSLATE_MODEL})")
+    expect(bubble).not_to_have_class(re.compile(r"\bphy-peek\b"))
+
+    bubble.click()
+    expect(bubble).to_have_class(re.compile(r"\bphy-peek\b"))
+
+    # Rangée sous la clé du modèle affiché : retrouvée au rechargement, sans retraduire.
+    translations = world.translations
+    page.reload()
+    expect(page.locator(BUBBLE, has_text="RT:가66-0")).to_be_visible(timeout=15_000)
+    assert world.translations == translations
+
+
+def test_shift_alt_t_retranslates_most_visible_image(browser, server, world):
+    """Maj+Alt+T : l'image la plus visible est retraduite en entier (OCR en cache)."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    set_storage(worker, retranslateModel=RETRANSLATE_MODEL)
+    page = open_episode(context)
+    expect(bubble_on(page, 66, 1)).to_be_visible(timeout=15_000)
+    ocr_runs = world.ocr_runs
+
+    page.keyboard.press("Shift+Alt+KeyT")
+    expect(page.locator(BUBBLE, has_text="RT:가66-0")).to_be_visible(timeout=10_000)
+    expect(page.locator(BADGE)).to_contain_text("Image retraduite")
+    expect(bubble_on(page, 66, 1)).to_be_visible()  # l'image suivante ne change pas
+    expect(page.locator(".phy-retranslating")).to_have_count(0)
+    # Pas de masquage des traductions : Maj+Alt+T n'est pas Alt+T.
+    expect(page.locator(BADGE)).to_contain_text("Traduit")
+    assert world.ocr_runs == ocr_runs

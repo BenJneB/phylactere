@@ -8,6 +8,7 @@ const LOCAL_URL = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?\/?$/;
 const ORIGINS = chrome.runtime.getManifest().host_permissions;
 
 let savedModel = "";
+let savedRetranslateModel = "";
 let currentSeries = null; // titleId de l'onglet actif, s'il affiche une page Naver
 let currentEpisode = null; // no de l'épisode affiché (page de lecture seulement)
 
@@ -33,6 +34,7 @@ async function init() {
   $("lookahead").value = clampLookahead(s.lookahead);
   showMode();
   savedModel = s.model;
+  savedRetranslateModel = s.retranslateModel;
   setModels([], "");
   await updateSeries();
   await checkPermissions();
@@ -101,10 +103,16 @@ async function refreshHealth() {
 // Liste des modèles Ollama installés ; le modèle enregistré reste proposé même s'il
 // n'y figure pas (serveur arrêté, modèle supprimé).
 function setModels(names, serverDefault) {
-  const select = $("model");
-  const current = select.options.length > 1 ? select.value : savedModel;
-  select.replaceChildren(new Option(serverDefault ? `Défaut du serveur (${serverDefault})` : "Défaut du serveur", ""));
-  const all = [...new Set([...names, savedModel].filter(Boolean))].sort();
+  fillModels($("model"), names, savedModel,
+    serverDefault ? `Défaut du serveur (${serverDefault})` : "Défaut du serveur");
+  fillModels($("retranslateModel"), names, savedRetranslateModel, "Le même que pour traduire");
+}
+
+// Première option (valeur vide) : `emptyLabel` ; sélection en cours gardée.
+function fillModels(select, names, saved, emptyLabel) {
+  const current = select.options.length > 1 ? select.value : saved;
+  select.replaceChildren(new Option(emptyLabel, ""));
+  const all = [...new Set([...names, saved].filter(Boolean))].sort();
   for (const name of all) {
     const missing = names.length && !names.includes(name) ? " — non installé" : "";
     select.add(new Option(name + missing, name));
@@ -130,6 +138,15 @@ $("translateMode").addEventListener("change", async () => {
   showMode();
   await chrome.storage.local.set({ translateMode: $("translateMode").value });
   status("Mode de traduction enregistré.");
+});
+
+// Modèle pour retraduire : enregistré tout de suite, sans retraduire la page.
+$("retranslateModel").addEventListener("change", async () => {
+  savedRetranslateModel = $("retranslateModel").value;
+  await chrome.storage.local.set({ retranslateModel: savedRetranslateModel });
+  status(savedRetranslateModel
+    ? `Retraduction avec ${savedRetranslateModel}.`
+    : "Retraduction avec le modèle de traduction.");
 });
 
 $("lookahead").addEventListener("change", async () => {

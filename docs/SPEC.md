@@ -111,6 +111,10 @@ Réponse :
 ```
 Coordonnées en pixels de l'image d'origine (`y + h` peut dépasser la hauteur de l'image : bulle qui déborde sur la suivante). `edges` (`top`, `bottom`) signale une bulle qui touche un bord sans voisine pour la compléter. Erreurs : 400 (URL refusée), 502/504 (serveur d'images, Ollama), 503 (OCR en chargement, Ollama arrêté ou modèle absent, avec un message qui donne la commande `ollama pull`).
 
+Chaque bloc porte aussi `model` (jalon 13, facultatif) : le modèle qui l'a traduit. Avec `"force": true` (jalon 13), la traduction en cache est ignorée puis remplacée (l'OCR en cache est réutilisé), et `retranslate_model` (facultatif) choisit le modèle qui retraduit ; le résultat reste rangé sous la clé de `model`, le modèle affiché.
+
+`POST /retranslate` (jalon 13) : `{ "image_url", "series_id", "episode_id", "index", "prev_image_url"?, "next_image_url"?, "target_lang"?, "model"?, "retranslate_model"?, "box" }`. Retraduit une seule bulle (retrouvée par sa boîte dans la traduction en cache) et la remplace dans le cache. Réponse : le bloc mis à jour. Erreurs : 404 (traduction ou bulle absente du cache), puis celles de `/translate` pour Ollama.
+
 `GET /glossary/{series_id}` et `PUT /glossary/{series_id}` : lecture et remplacement du glossaire (liste `{ "ko": "…", "fr": "…", "note": "…" }` ; `fr` est la traduction dans la langue cible). Remplacer le glossaire efface les traductions en cache des images de la série dont une bulle contient un terme ajouté, retiré ou modifié (traduction ou note), comparaison faite sans les espaces ; elles seront refaites avec lui. Jusqu'au jalon 9, toute la série était effacée.
 
 `POST /glossary/{series_id}/suggest` (jalon 10) : `{ "target_lang"?, "model"?, "episode_id"? }`. Propose des entrées à partir des bulles traduites en cache de la série, sans rien enregistrer. Réponse : `{ "entries": [ { "ko", "fr", "note", "examples": [ { "original", "translated" } ] } ], "bubbles": n }` (`bubbles` : nombre de bulles envoyées au modèle). Erreurs : 404 (aucune bulle en cache pour la série et la langue), 502 (réponse invalide deux fois), 503/504 (Ollama).
@@ -376,7 +380,7 @@ Ordre choisi : d'abord les tests de l'extension, qui n'en a aucun alors que les 
 
 ### Deuxième série d'évolutions (jalons 12 à 17)
 
-Ordre choisi : d'abord l'hygiène (cache borné, mesures), puis la retraduction, qui pose la mécanique « remplacer une bulle affichée » dont dépendent les corrections et la version améliorée. Ensuite les fonctions qui réutilisent le cache (corrections, résumé). La version améliorée vient après parce que sa faisabilité dépend d'une mesure sur le PC Windows, et l'export en dernier parce qu'il est indépendant et le moins utile. Chaque jalon reste livrable seul. La prétraduction en lot de plusieurs épisodes a été écartée.
+Ordre choisi : d'abord l'hygiène (cache borné, mesures), puis la retraduction, qui pose la mécanique « remplacer une bulle affichée » dont dépendent les corrections et la version améliorée. Ensuite les fonctions qui réutilisent le cache (corrections, résumé). La version améliorée venait après parce que sa faisabilité dépend d'une mesure sur le PC Windows ; elle est hors périmètre pour le moment (section 10). L'export vient en dernier parce qu'il est indépendant et le moins utile. Chaque jalon reste livrable seul. La prétraduction en lot de plusieurs épisodes a été écartée.
 
 12. **Cache borné et statistiques**. Aujourd'hui, `cache.sqlite3` grossit sans limite : chaque image lue y laisse son OCR et ses traductions, par modèle et par langue. Rien ne montre non plus ce que fait le serveur, à part les journaux de la console.
     - Taille maximale `[cache] max_mb` (défaut : 500, 0 = sans limite). Au-delà, on supprime les entrées OCR et traductions les moins récemment **utilisées**, pas les plus anciennes. Il faut une colonne `used` (horodatage), mise à jour à chaque lecture et ajoutée par `ALTER TABLE` aux bases existantes. Les glossaires (et les corrections du jalon 14) ne sont jamais purgés.
@@ -404,6 +408,15 @@ Ordre choisi : d'abord l'hygiène (cache borné, mesures), puis la retraduction,
     - Tests : bulle retrouvée et seule changée dans le cache, `force` (le client Ollama simulé est rappelé), modèle de retraduction différent mais clé d'affichage conservée. e2e : Maj+clic remplace le texte de la bulle, le clic simple masque toujours.
     - Critère (Windows) : une bulle retraduite avec un plus gros modèle garde sa nouvelle traduction après rechargement de la page.
 
+    **Réalisation :**
+
+    - `POST /retranslate` cherche la bulle dans la **traduction** en cache (même recherche par boîte que `/report`, mise en commun dans `schemas.match_box`), pas dans l'OCR : c'est elle qu'on remplace, et elle porte déjà l'original. Traduction absente (cache vidé, glossaire modifié) ou bulle introuvable : 404, « rechargez la page ». `retranslate_model` (facultatif) désigne le modèle qui retraduit ; `model` reste le modèle affiché, celui de la clé.
+    - Les autres bulles de l'image partent dans une section à part du prompt (« Autres bulles de la même image »), présente seulement pour une retraduction de bulle. Le prompt d'une image entière ne change donc pas, mais `PROMPT_VERSION` passe quand même à 3 (règle : tout changement du prompt l'incrémente) : les traductions en cache seront refaites, l'OCR en cache reste valable.
+    - `force: true` sur `/translate` ignore la traduction en cache, réutilise l'OCR en cache et remplace l'entrée. La tâche a sa propre clé dans la file : fusionnée avec une traduction ordinaire en cours de la même image, elle en aurait reçu le résultat sans rien retraduire.
+    - Chaque bloc porte `model` (modèle qui l'a traduit) ; l'infobulle affiche l'original puis « — modèle ». Un glossaire enregistré pendant une retraduction de bulle : le résultat est renvoyé mais pas mis en cache.
+    - Extension : réglage `retranslateModel` (popup « Modèle pour retraduire », enregistré à chaque changement, sans retraduire la page). Maj+clic : contour pointillé bleu sur la bulle, puis texte, infobulle et `fitText` mis à jour ; le clic garde l'indice de la bulle (`e.blocks[i]`) pour signaler ensuite la version retraduite. Maj+Alt+T : image dont la plus grande hauteur est à l'écran, pointillés sur toutes ses bulles, requête hors quota. `user-select: none` sur les bulles : Maj+clic sélectionnait du texte. Le badge affiche « Bulle retraduite (modèle) », « Image retraduite » ou l'erreur pendant 4 s.
+    - Tests : bloc avec son modèle, `force` (Ollama rappelé, OCR en cache, entrée remplacée), `force` avec un autre modèle rangé sous la clé affichée, bulle seule changée (autres bulles en contexte, une seule bulle envoyée), contexte des images précédentes, boîte décalée retrouvée, 404 (pas de traduction, boîte inconnue), jeton. e2e : Maj+clic (texte, infobulle, badge), clic simple qui masque toujours, nouvelle traduction gardée au rechargement sans rappeler Ollama ; Maj+Alt+T retraduit l'image visible seule, sans OCR ni masquage.
+
 14. **Corriger une bulle à la main**. Le signalement dit « c'est faux » ; la correction dit « voici la bonne version », et elle sert ensuite au modèle.
     - Ctrl+clic sur une bulle : elle devient modifiable (`contenteditable`, texte sélectionné). Entrée valide, Échap annule, Maj+Entrée ajoute un retour à la ligne. Valider un texte vide supprime la correction : la traduction du modèle revient.
     - Serveur : table `correction` (empreinte de l'URL de l'image, langue cible, boîte, original, texte, date). Elle ne dépend ni du modèle ni de `PROMPT_VERSION` : une correction humaine survit aux changements de prompt et de modèle. `DELETE /cache` ne la vide pas (comme les glossaires), la purge du jalon 12 non plus. Routes `PUT /correction` et `DELETE /correction`.
@@ -422,16 +435,7 @@ Ordre choisi : d'abord l'hygiène (cache borné, mesures), puis la retraduction,
     - Tests : ordre des bulles dans le prompt, résumé en cache (un seul appel au client simulé), 404 sans bulles, mention « lu en partie ». e2e : encart affiché à l'ouverture de l'épisode suivant.
     - Critère (Windows) : après la lecture d'un épisode, l'ouverture du suivant montre un résumé fidèle (relecture humaine).
 
-16. **Brouillon rapide, puis version améliorée**. Un petit modèle traduit vite ce qu'on lit, et un plus gros repasse derrière quand le GPU est libre.
-    - **À vérifier en premier, sur le PC Windows, sans certitude :** le modèle par défaut y est déjà `qwen3.5:9b`. Un 4b pour le brouillon et le 9b ensemble ne tiennent sans doute pas dans 8 Go avec PaddleOCR, et chaque basculement de modèle dans Ollama coûte un chargement (58 s à froid mesurées au jalon 3). Mesurer : mémoire GPU avec les deux modèles chargés (`OLLAMA_MAX_LOADED_MODELS`), et durée d'un basculement à chaud (fichiers dans le cache disque du système).
-    - Selon la mesure, une seule des deux variantes :
-      - **A. Deux modèles** (s'ils tiennent ensemble, ou si un basculement coûte moins de 10 s) : brouillon avec `[translation] draft_model`, version améliorée avec le modèle habituel.
-      - **B. Un seul modèle, second passage** : le même modèle retraduit l'épisode une fois qu'il est entièrement traduit, avec en contexte les bulles **suivantes** en plus des précédentes. Il gagne la cohérence (noms, répliques qui se répondent d'une image à l'autre), pas la puissance d'un plus gros modèle.
-      - Si ni A ni B n'apporte de différence visible au banc d'essai (`bench.py`, relecture humaine), on abandonne ce jalon et on le note ici.
-    - Mécanique commune : nouvelle priorité `background`, sous `prefetch`, et toute demande `visible` passe devant. L'extension envoie les images déjà affichées en `background` une fois la file vide, dans l'ordre de lecture, en un seul lot (un seul basculement de modèle par épisode en variante A). Les bulles se mettent à jour en place, par la mécanique du jalon 13, avec un fondu discret. Les bulles corrigées ne bougent pas. Un clic sur une bulle n'est pas perturbé par une mise à jour (elle attend que la bulle soit remise).
-    - La version améliorée est rangée sous sa propre clé de cache. À la réouverture d'un épisode, elle est servie en priorité si elle existe.
-    - Tests : priorité `background` (servie en dernier, doublée par `visible`), clé de cache de la version améliorée, contexte « bulles suivantes » (variante B). e2e : texte remplacé après le passage en `background`, bulle corrigée intacte.
-    - Critère (Windows) : en lisant normalement, les premières bulles s'affichent aussi vite qu'avant, et le reste de l'épisode est amélioré sans qu'on attende davantage les images visibles.
+16. *Hors périmètre pour le moment* (décision du 2026-11-24) : « Brouillon rapide, puis version améliorée ». Le cahier des charges complet est conservé en section 10, pour une reprise éventuelle.
 
 17. **Exporter un épisode traduit en PDF**. Usage strictement personnel : l'export n'est jamais publié ni partagé, de même que les images de `samples/` ne sont jamais versionnées. Il permet de relire un épisode hors ligne, par exemple sur un téléphone.
     - `scripts/export.py <series_id> <episode_id> [--lang fr] [--model …] [--open]`, que le serveur tourne ou non. Le script lit le cache (OCR, traductions, corrections), retélécharge les images (même allowlist que `fetch.py`) et écrit `config.data_dir()/exports/<series_id>-<episode_id>-<lang>.pdf`, jamais dans le dépôt. Il ne lance ni OCR ni traduction : une image sans traduction en cache est exportée sans bulles, avec un avertissement en console.
@@ -445,3 +449,18 @@ Ordre choisi : d'abord l'hygiène (cache borné, mesures), puis la retraduction,
 ## 10. Hors périmètre v1
 
 Effacement et redessin du texte d'origine (inpainting), détecteur de bulles par réseau de neurones, autres sites que comic.naver.com, version mobile, publication sur les stores.
+
+### Brouillon rapide, puis version améliorée (ancien jalon 16)
+
+Mis hors périmètre le 2026-11-24, détails conservés tels quels. Le numéro 16 reste réservé : les jalons suivants gardent leur numéro.
+
+Un petit modèle traduit vite ce qu'on lit, et un plus gros repasse derrière quand le GPU est libre.
+- **À vérifier en premier, sur le PC Windows, sans certitude :** le modèle par défaut y est déjà `qwen3.5:9b`. Un 4b pour le brouillon et le 9b ensemble ne tiennent sans doute pas dans 8 Go avec PaddleOCR, et chaque basculement de modèle dans Ollama coûte un chargement (58 s à froid mesurées au jalon 3). Mesurer : mémoire GPU avec les deux modèles chargés (`OLLAMA_MAX_LOADED_MODELS`), et durée d'un basculement à chaud (fichiers dans le cache disque du système).
+- Selon la mesure, une seule des deux variantes :
+  - **A. Deux modèles** (s'ils tiennent ensemble, ou si un basculement coûte moins de 10 s) : brouillon avec `[translation] draft_model`, version améliorée avec le modèle habituel.
+  - **B. Un seul modèle, second passage** : le même modèle retraduit l'épisode une fois qu'il est entièrement traduit, avec en contexte les bulles **suivantes** en plus des précédentes. Il gagne la cohérence (noms, répliques qui se répondent d'une image à l'autre), pas la puissance d'un plus gros modèle.
+  - Si ni A ni B n'apporte de différence visible au banc d'essai (`bench.py`, relecture humaine), on abandonne ce jalon et on le note ici.
+- Mécanique commune : nouvelle priorité `background`, sous `prefetch`, et toute demande `visible` passe devant. L'extension envoie les images déjà affichées en `background` une fois la file vide, dans l'ordre de lecture, en un seul lot (un seul basculement de modèle par épisode en variante A). Les bulles se mettent à jour en place, par la mécanique du jalon 13, avec un fondu discret. Les bulles corrigées ne bougent pas. Un clic sur une bulle n'est pas perturbé par une mise à jour (elle attend que la bulle soit remise).
+- La version améliorée est rangée sous sa propre clé de cache. À la réouverture d'un épisode, elle est servie en priorité si elle existe.
+- Tests : priorité `background` (servie en dernier, doublée par `visible`), clé de cache de la version améliorée, contexte « bulles suivantes » (variante B). e2e : texte remplacé après le passage en `background`, bulle corrigée intacte.
+- Critère (Windows) : en lisant normalement, les premières bulles s'affichent aussi vite qu'avant, et le reste de l'épisode est amélioré sans qu'on attende davantage les images visibles.

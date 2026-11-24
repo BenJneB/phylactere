@@ -75,8 +75,8 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 10 : glossaire assisté (page d'édition, propositions par le modèle)
 - [x] Jalon 11 : confort (signaler une bulle, préchargement de l'épisode suivant, délai dépassé côté extension)
 - [x] Jalon 12 : cache borné et statistiques
-- [ ] Jalon 13 : retraduire une bulle ou une image
+- [x] Jalon 13 : retraduire une bulle ou une image
 - [ ] Jalon 14 : corriger une bulle à la main
 - [ ] Jalon 15 : résumé « Précédemment… »
-- [ ] Jalon 16 : brouillon rapide puis version améliorée (sous réserve de mesure)
+- Jalon 16 : brouillon rapide puis version améliorée — hors périmètre pour le moment (détails conservés dans `docs/SPEC.md`, section 10)
 - [ ] Jalon 17 : export d'un épisode traduit en PDF

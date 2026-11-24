@@ -24,6 +24,8 @@
   hyphens: auto;
   pointer-events: auto;
   cursor: pointer;
+  /* Maj+clic (retraduire) sélectionnerait sinon le texte de la page */
+  user-select: none;
   transition: opacity 0.15s;
 }
 /* Clic sur une bulle : affiche le texte original dessous */
@@ -50,3 +52,7 @@
 /* Alt+clic : bulle signalée (envoi en cours, puis enregistrée par le serveur) */
 .phy-bubble[data-report="sending"] { outline: 2px dashed #9aa3b5; outline-offset: 1px; }
 .phy-bubble[data-report="done"] { outline: 2px dashed #d33; outline-offset: 1px; }
+
+/* Maj+clic (une bulle) ou Maj+Alt+T (toute l'image) : retraduction en cours */
+.phy-bubble[data-retranslate="sending"],
+.phy-layer.phy-retranslating .phy-bubble { outline: 2px dashed #2f5bd3; outline-offset: 1px; }

@@ -77,6 +77,14 @@ function withLangModel(body, s) {
   return out;
 }
 
+// Retraduction (jalon 13) : `model` reste le modèle affiché (clé du cache), et
+// `retranslate_model` celui qui retraduit (vide : le même).
+function withRetranslateModel(body, s) {
+  const out = withLangModel(body, s);
+  if (s.retranslateModel) out.retranslate_model = s.retranslateModel;
+  return out;
+}
+
 // Propositions d'entrées : le serveur les calcule après les images en attente (priorité
 // « background »), en une seule requête longue à Ollama.
 async function suggestGlossary(seriesId, episodeId) {

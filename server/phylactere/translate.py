@@ -25,7 +25,7 @@ from phylactere.errors import ServiceError
 logger = logging.getLogger("phylactere.translate")
 
 # À incrémenter à chaque changement du prompt : invalide les traductions en cache.
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 
 LANGUAGE_NAMES = {
     "fr": "français",
@@ -122,7 +122,11 @@ def user_prompt(
     target_lang: str,
     context: list[tuple[str, str]],
     glossary: list[GlossaryEntry],
+    neighbors: list[tuple[str, str]] | None = None,
 ) -> str:
+    """``neighbors`` : autres bulles de la même image, déjà traduites (retraduction d'une
+    seule bulle, jalon 13). Section absente sinon : le prompt d'une image entière ne
+    change pas, ses traductions en cache restent valables."""
     language = language_name(target_lang)
     parts = []
     if glossary:
@@ -132,6 +136,12 @@ def user_prompt(
         lines = [f"- {original} → {translated}" for original, translated in context]
         parts.append(
             "Bulles précédentes de l'épisode, déjà traduites (contexte, ne pas les "
+            "retraduire) :\n" + "\n".join(lines)
+        )
+    if neighbors:
+        lines = [f"- {original} → {translated}" for original, translated in neighbors]
+        parts.append(
+            "Autres bulles de la même image, déjà traduites (contexte, ne pas les "
             "retraduire) :\n" + "\n".join(lines)
         )
     bubbles = json.dumps(
@@ -266,11 +276,12 @@ class OllamaTranslator:
         context: list[tuple[str, str]],
         glossary: list[GlossaryEntry],
         model: str,
+        neighbors: list[tuple[str, str]] | None = None,
     ) -> dict[int, str]:
         """Une requête ; renvoie les traductions reçues pour les ids demandés."""
         content = await self.chat(
             system_prompt(target_lang),
-            user_prompt(items, target_lang, context, glossary),
+            user_prompt(items, target_lang, context, glossary, neighbors),
             model,
         )
         try:
@@ -290,10 +301,12 @@ class OllamaTranslator:
         context: list[tuple[str, str]] | None = None,
         glossary: list[GlossaryEntry] | None = None,
         model: str | None = None,
+        neighbors: list[tuple[str, str]] | None = None,
     ) -> list[str]:
         """Traduit les bulles d'une image ; renvoie une traduction par texte, dans l'ordre.
 
         ``model`` : modèle Ollama à utiliser (défaut : celui de la configuration).
+        ``neighbors`` : autres bulles de l'image déjà traduites (retraduction d'une bulle).
         """
         model = model or self._ollama.model
         context = context or []
@@ -306,7 +319,9 @@ class OllamaTranslator:
             if not pending:
                 break
             try:
-                results.update(await self._request(pending, target_lang, context, glossary, model))
+                results.update(
+                    await self._request(pending, target_lang, context, glossary, model, neighbors)
+                )
             except InvalidResponse as exc:
                 logger.warning("Tentative %d : %s", attempt, exc)
             pending = {k: v for k, v in pending.items() if k not in results}
@@ -314,7 +329,9 @@ class OllamaTranslator:
         # Dernier recours : une requête par bulle encore manquante.
         for item_id, text in pending.items():
             try:
-                found = await self._request({1: text}, target_lang, context, glossary, model)
+                found = await self._request(
+                    {1: text}, target_lang, context, glossary, model, neighbors
+                )
             except InvalidResponse as exc:
                 logger.warning("Bulle %d : %s", item_id, exc)
                 found = {}

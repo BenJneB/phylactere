@@ -92,6 +92,12 @@
     <option value="">Défaut du serveur</option>
   </select>
 
+  <label for="retranslateModel">Modèle pour retraduire</label>
+  <select id="retranslateModel">
+    <option value="">Le même que pour traduire</option>
+  </select>
+  <div class="hint">Maj+clic sur une bulle la retraduit, Maj+Alt+T retraduit l’image la plus visible.</div>
+
   <label for="translateMode">Quand traduire</label>
   <select id="translateMode">
     <option value="episode">Tout l’épisode dès l’ouverture</option>
@@ -114,7 +120,7 @@
     <summary>Statistiques</summary>
     <dl id="stats"><dt>…</dt><dd></dd></dl>
   </details>
-  <div class="hint">Sur la page : Alt+T ou clic sur le badge pour revoir l’original, clic sur une bulle pour la masquer.</div>
+  <div class="hint">Sur la page : Alt+T ou clic sur le badge pour revoir l’original, clic sur une bulle pour la masquer, Maj+clic pour la retraduire.</div>
 
   <script src="defaults.js"></script>
   <script src="popup.js"></script>
