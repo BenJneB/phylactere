@@ -62,9 +62,10 @@ def log_config(level: str, path: Path) -> dict:
     }
     for name in ("uvicorn", "uvicorn.access"):
         config["loggers"][name]["handlers"].append("file")
-    # Journaux de Phylactère (et des bibliothèques) : fichier seulement, la console
-    # les reçoit déjà par le gestionnaire que paddlex installe.
-    config["root"] = {"handlers": ["file"], "level": level.upper()}
+    # Journaux de Phylactère (et des bibliothèques) : console et fichier. Sans le
+    # gestionnaire console, plus rien n'apparaîtrait dans la fenêtre de start.ps1
+    # (le gestionnaire de paddlex ne concerne que le logger « paddlex »).
+    config["root"] = {"handlers": ["default", "file"], "level": level.upper()}
     # Détail de chaque connexion HTTP (Ollama, images) : illisible même en debug.
     config["loggers"]["httpcore"] = {"level": "WARNING"}
     return config

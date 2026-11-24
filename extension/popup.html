@@ -63,7 +63,7 @@
 
   <label for="token">Jeton</label>
   <input type="password" id="token" autocomplete="off" spellcheck="false">
-  <div class="hint">Affiché dans la console au lancement du serveur (start.ps1).</div>
+  <div class="hint">Affiché au lancement du serveur (start.ps1), et écrit dans %LOCALAPPDATA%\phylactere\config.toml.</div>
 
   <label for="targetLang">Traduire vers</label>
   <select id="targetLang">
@@ -94,6 +94,7 @@
   <div id="status"></div>
   <div class="hint">Sur la page : Alt+T ou clic sur le badge pour revoir l’original, clic sur une bulle pour la masquer.</div>
 
+  <script src="defaults.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

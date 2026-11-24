@@ -21,7 +21,6 @@ $ErrorActionPreference = 'Stop'
 $RootDir = Split-Path -Parent $PSScriptRoot
 $StartScript = Join-Path $PSScriptRoot 'start.ps1'
 $Shortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'Phylactere.lnk'
-$LogFile = Join-Path $env:LOCALAPPDATA 'phylactere\Logs\server.log'
 # Toujours Windows PowerShell 5.1, même si ce script est lancé depuis PowerShell 7.
 $PowerShellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
@@ -37,8 +36,14 @@ if ($Remove) {
     exit 0
 }
 
-if (-not (Test-Path (Join-Path $RootDir 'server\.venv'))) {
+$Python = Join-Path $RootDir 'server\.venv\Scripts\python.exe'
+if (-not (Test-Path $Python)) {
     throw 'Le serveur n''est pas installé : lance d''abord .\scripts\install.ps1'
+}
+# Port et journal réels, lus dans la configuration (le port peut avoir été changé).
+$Port, $LogFile = & $Python -c "from phylactere.__main__ import LOG_FILE; from phylactere.config import load_settings, log_dir; print(load_settings().server.port); print(log_dir() / LOG_FILE)"
+if ($LASTEXITCODE -ne 0) {
+    throw 'Lecture de la configuration impossible : lance .\scripts\start.ps1 pour voir l''erreur.'
 }
 
 $shell = New-Object -ComObject WScript.Shell
@@ -59,7 +64,7 @@ $ok = $false
 for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
     Start-Sleep -Seconds 1
     try {
-        $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 2
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
         $ok = [bool]$health.ok
     }
     catch {
@@ -67,10 +72,10 @@ for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
     }
 }
 if ($ok) {
-    Write-Host 'Serveur lancé : http://127.0.0.1:8765/health' -ForegroundColor Green
+    Write-Host "Serveur lancé : http://127.0.0.1:$Port/health" -ForegroundColor Green
 }
 else {
-    Write-Host "Le serveur ne répond pas encore sur le port 8765 (port modifié dans la configuration ?). Voir le journal : $LogFile" -ForegroundColor Yellow
+    Write-Host "Le serveur ne répond pas encore sur le port $Port. Voir le journal : $LogFile" -ForegroundColor Yellow
 }
 Write-Host "Journal : $LogFile"
 Write-Host 'Arrêt : .\scripts\stop.ps1 ; retrait du démarrage automatique : .\scripts\install-autostart.ps1 -Remove'

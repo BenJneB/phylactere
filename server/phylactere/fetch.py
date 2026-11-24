@@ -11,17 +11,14 @@ import httpx
 from PIL import Image, UnidentifiedImageError
 
 from phylactere.config import FetchConfig
+from phylactere.errors import ServiceError
 
 # Les serveurs d'images de Naver refusent (403) les requêtes sans ce Referer.
 REFERER = "https://comic.naver.com/"
 
 
-class FetchError(Exception):
+class FetchError(ServiceError):
     """Échec du téléchargement ; ``status_code`` est le code HTTP à renvoyer au client."""
-
-    def __init__(self, message: str, status_code: int) -> None:
-        super().__init__(message)
-        self.status_code = status_code
 
 
 def check_url(url: str, cfg: FetchConfig) -> None:

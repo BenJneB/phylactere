@@ -27,16 +27,27 @@ def test_log_config_writes_to_rotating_file(tmp_path):
     import logging.config
 
     path = tmp_path / "server.log"
+    loggers = [logging.getLogger(name) for name in ("", "uvicorn", "uvicorn.access")]
+    saved = [(lg, lg.handlers[:], lg.level, lg.propagate) for lg in loggers]
     logging.config.dictConfig(log_config("info", path))
     try:
+        root_handlers = list(logging.getLogger().handlers)
         logging.getLogger("phylactere.test").info("bonjour 안녕")
         logging.getLogger("uvicorn.error").warning("attention")
         logging.getLogger("phylactere.test").debug("invisible au niveau info")
     finally:
-        for handler in logging.getLogger().handlers + logging.getLogger("uvicorn").handlers:
-            handler.close()
-        logging.config.dictConfig({"version": 1, "disable_existing_loggers": False})
+        # Rend la configuration de logging d'avant : sinon les tests suivants écrivent
+        # dans ce fichier et dans un stderr capturé déjà fermé.
+        for lg, handlers, level, propagate in saved:
+            for handler in lg.handlers:
+                if handler not in handlers:
+                    handler.close()
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = propagate
 
+    # La console garde aussi les journaux de Phylactère (fenêtre de start.ps1).
+    assert any(type(h) is logging.StreamHandler for h in root_handlers)
     content = path.read_text(encoding="utf-8")
     assert "phylactere.test : bonjour 안녕" in content
     assert "attention" in content

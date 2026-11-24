@@ -1,24 +1,20 @@
 """POST /translate, /glossary et /cache de bout en bout (OCR, images et Ollama simulés)."""
 
 import json
-from io import BytesIO
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
 
 from phylactere.config import load_settings
 from phylactere.main import TOKEN_HEADER, create_app
-from tests.helpers import FakeDetector, line
+from tests.helpers import FakeDetector, line, png_bytes
 
 BASE = "https://image-comic.pstatic.net/webtoon/1/2/"
 
 
-def png(width=690, height=1000) -> bytes:  # une seule tranche OCR
-    out = BytesIO()
-    Image.new("RGB", (width, height), "white").save(out, format="PNG")
-    return out.getvalue()
+# Une seule tranche OCR.
+IMAGE_SIZE = (690, 1000)
 
 
 class World:
@@ -34,7 +30,7 @@ class World:
 
     def images(self, request):
         self.image_requests.append(str(request.url))
-        return httpx.Response(200, content=png())
+        return httpx.Response(200, content=png_bytes(IMAGE_SIZE))
 
     def ollama(self, request):
         if request.url.path == "/api/tags":
@@ -77,7 +73,7 @@ def client(world):
         detector_factory=world.detector,
     )
     with TestClient(app, base_url="http://127.0.0.1") as c:
-        c.app.state.ocr._executor.submit(lambda: None).result(5)
+        c.app.state.ocr.wait_loaded(5)
         c.headers[TOKEN_HEADER] = load_settings().server.token
         yield c
 
@@ -166,7 +162,7 @@ def test_unreadable_neighbor_is_ignored(client, world):
     def images(request):
         if request.url.path.endswith("2.jpg"):
             return httpx.Response(403)
-        return httpx.Response(200, content=png())
+        return httpx.Response(200, content=png_bytes(IMAGE_SIZE))
 
     client.app.state.images._transport = httpx.MockTransport(images)
     response = client.post("/translate", json=request(index=1, next_image_url=f"{BASE}2.jpg"))

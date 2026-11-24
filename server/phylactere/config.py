@@ -187,10 +187,9 @@ def ensure_user_config(path: Path) -> None:
 
     if "server" not in doc:
         doc["server"] = tomlkit.table()
-    if path.exists() and doc["server"].get("token"):
+    if doc["server"].get("token"):
         return
-    if not doc["server"].get("token"):
-        doc["server"]["token"] = secrets.token_urlsafe(32)
+    doc["server"]["token"] = secrets.token_urlsafe(32)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")
 

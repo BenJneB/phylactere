@@ -80,6 +80,9 @@ class Cache:
         self._db = sqlite3.connect(path, check_same_thread=False)
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
+            # En WAL, NORMAL évite un fsync par écriture sans risque de corruption ; une
+            # coupure de courant peut perdre les dernières entrées : acceptable pour un cache.
+            self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
             self._db.commit()
 
@@ -100,7 +103,7 @@ class Cache:
         row = self._db.execute("SELECT result FROM ocr WHERE key = ?", (key,)).fetchone()
         return OcrResult.model_validate_json(row[0]) if row else None
 
-    def _put_ocr(self, key: str, series_id: str | None, result: OcrResult) -> None:
+    def _put_ocr(self, key: str, series_id: str, result: OcrResult) -> None:
         self._db.execute(
             "INSERT OR REPLACE INTO ocr VALUES (?, ?, ?, ?)",
             (key, series_id, result.model_dump_json(), time.time()),
@@ -110,7 +113,7 @@ class Cache:
     async def get_ocr(self, key: str) -> OcrResult | None:
         return await self._run(self._get_ocr, key)
 
-    async def put_ocr(self, key: str, series_id: str | None, result: OcrResult) -> None:
+    async def put_ocr(self, key: str, series_id: str, result: OcrResult) -> None:
         await self._run(self._put_ocr, key, series_id, result)
 
     # --- Traductions ---
@@ -173,12 +176,40 @@ class Cache:
     async def get_translation(self, key: str) -> TranslationResult | None:
         return await self._run(self._get_translation, key)
 
-    async def put_translation(self, key: str, *args) -> None:
-        await self._run(self._put_translation, key, *args)
+    async def put_translation(
+        self,
+        key: str,
+        series_id: str,
+        episode_id: str,
+        image_index: int,
+        target_lang: str,
+        model: str,
+        result: TranslationResult,
+    ) -> None:
+        await self._run(
+            self._put_translation,
+            key,
+            series_id,
+            episode_id,
+            image_index,
+            target_lang,
+            model,
+            result,
+        )
 
-    async def context(self, *args) -> list[tuple[str, str]]:
+    async def context(
+        self,
+        series_id: str,
+        episode_id: str,
+        image_index: int,
+        target_lang: str,
+        model: str,
+        limit: int,
+    ) -> list[tuple[str, str]]:
         """Dernières bulles traduites des images précédentes de l'épisode, dans l'ordre."""
-        return await self._run(self._context, *args)
+        return await self._run(
+            self._context, series_id, episode_id, image_index, target_lang, model, limit
+        )
 
     # --- Glossaires ---
 

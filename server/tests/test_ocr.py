@@ -146,7 +146,7 @@ def test_engine_loading_then_ready():
         with pytest.raises(OcrUnavailable, match="chargement"):
             asyncio.run(engine.recognize(Image.new("RGB", (10, 10))))
         release.set()
-        engine._executor.submit(lambda: None).result(5)  # attend la fin du chargement
+        engine.wait_loaded(5)
         assert engine.status == "ready"
         result = asyncio.run(engine.recognize(Image.new("RGB", (10, 10))))
         assert result.bubbles == []
@@ -161,7 +161,7 @@ def test_engine_reports_load_error():
 
     engine = OcrEngine(OCR, GROUPING, broken)
     engine.start()
-    engine._executor.submit(lambda: None).result(5)
+    engine.wait_loaded(5)
     try:
         assert engine.status == "error"
         assert engine.error == "pas de GPU"

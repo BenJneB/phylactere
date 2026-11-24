@@ -2,11 +2,10 @@ const $ = (id) => document.getElementById(id);
 const status = (msg, cls = "ok") => { $("status").textContent = msg; $("status").className = cls; };
 const send = (msg) => chrome.runtime.sendMessage(msg);
 
-const DEFAULTS = { serverUrl: "http://127.0.0.1:8765", token: "", targetLang: "fr", model: "", enabled: true };
 // Le serveur n'écoute que sur la machine locale (et le manifeste ne donne accès qu'à elle).
 const LOCAL_URL = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?\/?$/;
 // Firefox n'accorde pas toujours les permissions d'hôte des extensions MV3 à l'installation.
-const ORIGINS = ["http://127.0.0.1/*", "http://localhost/*", "https://comic.naver.com/*"];
+const ORIGINS = chrome.runtime.getManifest().host_permissions;
 
 let savedModel = "";
 let currentSeries = null; // titleId de l'onglet actif, s'il affiche une page Naver
@@ -30,24 +29,29 @@ async function init() {
   $("targetLang").value = s.targetLang;
   savedModel = s.model;
   setModels([], "");
-  currentSeries = await activeSeries();
-  $("clearSeries").hidden = !currentSeries;
+  await updateSeries();
   await checkPermissions();
   await refresh();
   setInterval(refreshHealth, 5000);
 }
 
+// Le bouton « Vider le cache de cette série » n'apparaît que sur une page Naver.
+async function updateSeries() {
+  currentSeries = await activeSeries();
+  $("clearSeries").hidden = !currentSeries;
+}
+
 async function checkPermissions() {
-  const granted = await chrome.permissions.contains({ origins: ORIGINS });
-  $("grant").hidden = granted;
-  return granted;
+  $("grant").hidden = await chrome.permissions.contains({ origins: ORIGINS });
 }
 
 $("grant").addEventListener("click", async () => {
   // Doit être appelé directement depuis le clic (geste de l'utilisateur).
   const granted = await chrome.permissions.request({ origins: ORIGINS });
   $("grant").hidden = granted;
-  if (granted) refresh();
+  if (!granted) return;
+  await updateSeries(); // l'URL de l'onglet n'est lisible qu'avec la permission
+  refresh();
 });
 
 async function refresh() {
@@ -75,7 +79,7 @@ async function refreshHealth() {
   const h = res.data;
   const problems = [];
   if (h.ocr === "loading") problems.push("OCR en chargement…");
-  if (h.ocr === "error") problems.push("OCR en erreur (voir la console du serveur)");
+  if (h.ocr === "error") problems.push("OCR en erreur (voir le journal %LOCALAPPDATA%\\phylactere\\Logs\\server.log)");
   if (h.ollama === "down") problems.push("Ollama arrêté");
   dot.className = "dot " + (h.ocr === "error" ? "err" : problems.length ? "warn" : "ok");
   const device = h.device === "auto" ? "" : ` (${h.device.toUpperCase()})`;

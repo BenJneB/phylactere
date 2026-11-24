@@ -11,12 +11,12 @@
   ],
   "background": {
     "service_worker": "background.js",
-    "scripts": ["background.js"]
+    "scripts": ["defaults.js", "background.js"]
   },
   "content_scripts": [
     {
       "matches": ["https://comic.naver.com/*"],
-      "js": ["content.js"],
+      "js": ["defaults.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }
