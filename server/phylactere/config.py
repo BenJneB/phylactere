@@ -23,6 +23,7 @@ ENV_CONFIG = "PHYLACTERE_CONFIG"
 ENV_CONFIG_DIR = "PHYLACTERE_CONFIG_DIR"
 ENV_CACHE_DIR = "PHYLACTERE_CACHE_DIR"
 ENV_LOG_DIR = "PHYLACTERE_LOG_DIR"
+ENV_DATA_DIR = "PHYLACTERE_DATA_DIR"
 EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "config.example.toml"
 
 
@@ -131,6 +132,21 @@ def log_dir() -> Path:
     if custom := os.environ.get(ENV_LOG_DIR):
         return Path(custom)
     return Path(platformdirs.user_log_dir(APP_NAME, appauthor=False))
+
+
+def data_dir() -> Path:
+    """Dossier des données à garder (signalements), hors du dépôt.
+
+    Windows : %LOCALAPPDATA%\\phylactere ; Linux : ~/.local/share/phylactere.
+    """
+    if custom := os.environ.get(ENV_DATA_DIR):
+        return Path(custom)
+    return Path(platformdirs.user_data_dir(APP_NAME, appauthor=False, roaming=False))
+
+
+def reports_dir() -> Path:
+    """Signalements de bulles (jalon 11) : un JSON et une découpe PNG par signalement."""
+    return data_dir() / "reports"
 
 
 def config_dir() -> Path:

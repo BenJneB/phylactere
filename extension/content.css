@@ -46,3 +46,7 @@
 }
 .phy-badge[data-state="error"] { background: #a3262b; }
 .phy-badge[data-state="wait"] { background: #9a5b00; }
+
+/* Alt+clic : bulle signalée (envoi en cours, puis enregistrée par le serveur) */
+.phy-bubble[data-report="sending"] { outline: 2px dashed #9aa3b5; outline-offset: 1px; }
+.phy-bubble[data-report="done"] { outline: 2px dashed #d33; outline-offset: 1px; }

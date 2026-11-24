@@ -25,13 +25,15 @@ uv run python -m phylactere --check-ocr   # charge PaddleOCR et lit tests/data/k
 PHYLACTERE_CONFIG=config.dev.toml uv run python ../scripts/translate_samples.py ../samples/729047-66 --limit 20
 # Banc d'essai (jalon 4, serveur arrêté) : rapport HTML dans samples/bench/
 uv run python ../scripts/bench.py ../samples/729047-66 --models qwen3.5:4b --variants base,coreen --limit 6
+# Rapport HTML des bulles signalées (Alt+clic) : ~/.local/share/phylactere/reports/index.html
+uv run python ../scripts/reports.py --open
 uv run ruff check . && uv run ruff format .
 
 # Vérifier la syntaxe des scripts PowerShell (PowerShell 7 installé via snap)
 pwsh -NoProfile -Command '$n = 0; foreach ($f in Get-ChildItem ../scripts/*.ps1) { $e = $null; [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$e) | Out-Null; foreach ($x in $e) { $n++; Write-Host "$($f.Name):$($x.Extent.StartLineNumber) $($x.Message)" } }; exit $n'
 ```
 
-Configuration en trois niveaux (voir `server/phylactere/config.py`) : `config.example.toml` (défauts) ← `config.toml` du dossier utilisateur (contient le jeton) ← fichier désigné par `PHYLACTERE_CONFIG` (surcharges, jamais de jeton). `PHYLACTERE_CONFIG_DIR` et `PHYLACTERE_CACHE_DIR` déplacent les dossiers de config et de cache (tests, CI). Cache SQLite : `~/.cache/phylactere/cache.sqlite3`. Les modèles PaddleOCR sont dans le dossier de cache `platformdirs` (`~/.cache/phylactere/paddlex`), ou dans `PADDLE_PDX_CACHE_HOME` s'il est défini.
+Configuration en trois niveaux (voir `server/phylactere/config.py`) : `config.example.toml` (défauts) ← `config.toml` du dossier utilisateur (contient le jeton) ← fichier désigné par `PHYLACTERE_CONFIG` (surcharges, jamais de jeton). `PHYLACTERE_CONFIG_DIR`, `PHYLACTERE_CACHE_DIR` et `PHYLACTERE_DATA_DIR` déplacent les dossiers de config, de cache et de données (signalements) (tests, CI). Cache SQLite : `~/.cache/phylactere/cache.sqlite3`. Les modèles PaddleOCR sont dans le dossier de cache `platformdirs` (`~/.cache/phylactere/paddlex`), ou dans `PADDLE_PDX_CACHE_HOME` s'il est défini.
 
 Images de test : `samples/<titleId>-<no>/` (non versionné). `samples/fetch_samples.py` (local, non versionné) télécharge un épisode : `uv run python ../samples/fetch_samples.py "<url de l'épisode>"`.
 
@@ -71,4 +73,4 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 8 : mode de traduction au défilement
 - [x] Jalon 9 : couleur des bulles prise sur l'image
 - [x] Jalon 10 : glossaire assisté (page d'édition, propositions par le modèle)
-- [ ] Jalon 11 : confort (signaler une bulle, préchargement de l'épisode suivant)
+- [x] Jalon 11 : confort (signaler une bulle, préchargement de l'épisode suivant, délai dépassé côté extension)

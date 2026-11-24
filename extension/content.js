@@ -16,7 +16,13 @@
   const MAX_IN_FLIGHT = 3;
   const HEALTH_RETRY_MS = 5000; // nouvel essai quand le serveur est arrêté
   const PAD = 6; // marge autour du texte détecté (px de l'image d'origine)
-  const HINT = "Clic ou Alt+T : afficher / masquer les traductions";
+  // Délai dépassé (serveur lent, pas arrêté) : l'image repart en file au plus 2 fois.
+  const MAX_TIMEOUT_RETRIES = 2;
+  // Mode « episode » : l'épisode suivant est préchargé une fois l'épisode courant traduit
+  // et la lecture passée à 80 % de ses images.
+  const NEXT_EPISODE_PROGRESS = 0.8;
+  const NOTICE_MS = 4000; // durée d'un message temporaire du badge
+  const HINT = "Clic ou Alt+T : afficher / masquer les traductions\nAlt+clic sur une bulle : la signaler";
 
   const entries = new Map(); // url -> entrée (voir track())
   let order = []; // entrées dans l'ordre de l'épisode
@@ -31,6 +37,11 @@
   let translateMode = DEFAULTS.translateMode;
   let lookahead = DEFAULTS.lookahead;
   let lastHref = location.href;
+  // Préchargement de l'épisode suivant : null (pas encore demandé), puis
+  // { state: "loading" | "none" | "ready", episodeId, urls, pending, done, failed }.
+  let upcoming = null;
+  let notice = null; // { text, state } : message temporaire du badge (signalement)
+  let noticeTimer = 0;
 
   // --- Badge d'état ---
   const badge = document.createElement("div");
@@ -92,12 +103,12 @@
 
   // Les images de l'épisode sont reconnues à leur URL : …/webtoon/<titleId>/<no>/…
   // (pas à leur taille : on peut ainsi les envoyer au serveur avant qu'elles chargent).
-  function isEpisodeImage(url) {
-    if (!episode) return false;
+  function isEpisodeImage(url, ep = episode) {
+    if (!ep) return false;
     try {
       const u = new URL(url);
       return u.protocol === "https:" && u.hostname === IMG_HOST &&
-        u.pathname.includes(`/${episode.seriesId}/${episode.episodeId}/`) &&
+        u.pathname.includes(`/${ep.seriesId}/${ep.episodeId}/`) &&
         !/\/thumbnail[^/]*$/.test(u.pathname);
     } catch {
       return false;
@@ -124,12 +135,12 @@
   }
 
   // Entrée : { url, img, index, status: "queued" | "working" | "done" | "error",
-  //            visible, sentVisible, blocks, imageSize, layer, error }
+  //            visible, sentVisible, timeouts, blocks, imageSize, layer, error }
   // `visible` vaut null tant que l'IntersectionObserver n'a pas répondu pour l'image.
   function track(url, img) {
     let e = entries.get(url);
     if (!e) {
-      e = { url, img, index: 0, status: "queued", visible: null, sentVisible: false };
+      e = { url, img, index: 0, status: "queued", visible: null, sentVisible: false, timeouts: 0 };
       entries.set(url, e);
     } else if (e.img !== img) {
       visibility.unobserve(e.img);
@@ -190,9 +201,10 @@
   function pump() {
     while (!pause && inFlight < MAX_IN_FLIGHT) {
       const e = nextEntry();
-      if (!e) break;
-      send(e, e.visible ? "visible" : "prefetch", true);
+      if (e) send(e, e.visible ? "visible" : "prefetch", true);
+      else if (!sendUpcoming()) break;
     }
+    maybeLoadUpcoming();
     updateBadge();
   }
 
@@ -223,11 +235,11 @@
     }
     if (gen !== generation) return; // page remise à zéro entre-temps
     if (counted) inFlight--;
-    handle(e, res || { ok: false, kind: "error", error: "Réponse vide" });
+    handle(e, res || { ok: false, kind: "error", error: "Réponse vide" }, counted);
     pump();
   }
 
-  function handle(e, res) {
+  function handle(e, res, counted) {
     if (e.status === "done") return; // l'autre requête (visible / prefetch) a déjà répondu
     if (res.ok) {
       e.status = "done";
@@ -236,7 +248,21 @@
       render(e);
       return;
     }
-    if (res.kind === "error") {
+    if (res.kind === "timeout") {
+      // Le renvoi « visible » a expiré alors que la requête de la file court encore :
+      // c'est elle qui conclura.
+      if (!counted && e.status === "working") return;
+      // Le serveur continue la tâche et la met en cache : une nouvelle demande est
+      // fusionnée avec elle, ou servie par le cache. Au-delà de la limite : erreur.
+      if (++e.timeouts <= MAX_TIMEOUT_RETRIES) {
+        e.status = "queued";
+        e.sentVisible = false;
+        console.info("[Phylactère] Délai dépassé, image remise en file :", e.url);
+        return;
+      }
+      res = { ...res, error: `${res.error} (${e.timeouts} essais)` };
+    }
+    if (res.kind === "error" || res.kind === "timeout") {
       e.status = "error";
       e.error = res.error;
       console.warn("[Phylactère]", res.error, e.url);
@@ -276,6 +302,164 @@
     else pauseTimer = setTimeout(checkHealth, HEALTH_RETRY_MS);
   }
 
+  // --- Préchargement de l'épisode suivant (mode « episode ») ---
+
+  // Épisode courant terminé : plus aucune image en file ni en cours (une image en erreur
+  // ne bloque pas le préchargement).
+  function episodeFinished() {
+    return order.length > 0 && order.every((e) => e.status === "done" || e.status === "error");
+  }
+
+  // Part de l'épisode atteinte : images dont le haut est passé sous le bas de l'écran.
+  function readingProgress() {
+    const reached = order.filter((e) => e.img.isConnected &&
+      e.img.getBoundingClientRect().top < innerHeight).length;
+    return reached / order.length;
+  }
+
+  function maybeLoadUpcoming() {
+    if (upcoming || translateMode !== "episode" || !episode || pause) return;
+    if (!episodeFinished() || readingProgress() < NEXT_EPISODE_PROGRESS) return;
+    upcoming = { state: "loading" };
+    loadUpcoming();
+  }
+
+  // Numéro de l'épisode suivant, lu dans le script d'état que Naver met dans la page
+  // (window.__state__ = { …, nextArticle: { no: '67', charge: false, … } }). Le content
+  // script ne voit pas les variables de la page, mais il lit le texte de ses scripts.
+  // Épisode payant (charge: true) ou absent (dernier épisode) : pas de préchargement.
+  function nextEpisodeNumber() {
+    for (const script of document.querySelectorAll("script:not([src])")) {
+      const block = /nextArticle\s*:\s*\{([^}]*)\}/.exec(script.textContent)?.[1];
+      if (block === undefined) continue;
+      const no = /\bno\s*:\s*['"]?(\d+)/.exec(block)?.[1];
+      // Même numéro que l'épisode affiché : script d'une page déjà quittée (navigation
+      // sans rechargement).
+      if (!no || no === episode.episodeId || /\bcharge\s*:\s*true/.test(block)) return null;
+      return no;
+    }
+    return null;
+  }
+
+  // Les URL des images d'un épisode sont dans le HTML de sa page (rendu par le serveur de
+  // Naver, #sectionContWide) : on le télécharge sans l'ouvrir, avec les cookies de
+  // l'utilisateur (même origine), puis on applique la même sélection que scan().
+  async function loadUpcoming() {
+    const gen = generation;
+    const episodeId = nextEpisodeNumber();
+    let urls = [];
+    if (episodeId) {
+      try {
+        const url = new URL(location.href);
+        url.searchParams.set("no", episodeId);
+        url.hash = "";
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+        const root = doc.querySelector(VIEWER) || doc;
+        const ep = { seriesId: episode.seriesId, episodeId };
+        for (const img of root.querySelectorAll("img")) {
+          const src = img.getAttribute("src") || img.dataset.src || "";
+          if (isEpisodeImage(src, ep) && !urls.includes(src)) urls.push(src);
+        }
+      } catch (err) {
+        console.warn("[Phylactère] Épisode suivant illisible :", err?.message || err);
+        urls = [];
+      }
+    }
+    if (gen !== generation) return;
+    upcoming = urls.length
+      ? { state: "ready", episodeId, urls, pending: urls.map((_, i) => i), done: 0, failed: 0 }
+      : { state: "none" };
+    pump();
+  }
+
+  // Envoie une image de l'épisode suivant en « prefetch », seulement quand l'épisode
+  // courant n'a plus rien à traduire. Mêmes voisines que lorsque l'épisode sera ouvert :
+  // elles entrent dans la clé du cache OCR.
+  function sendUpcoming() {
+    const up = upcoming;
+    if (up?.state !== "ready" || !up.pending.length) return false;
+    if (translateMode !== "episode" || !episodeFinished()) return false;
+    const i = up.pending.shift();
+    sendUpcomingImage(up, i);
+    return true;
+  }
+
+  async function sendUpcomingImage(up, i) {
+    const gen = generation;
+    inFlight++;
+    const request = {
+      image_url: up.urls[i],
+      series_id: episode.seriesId,
+      episode_id: up.episodeId,
+      index: i,
+      priority: "prefetch",
+      prev_image_url: up.urls[i - 1],
+      next_image_url: up.urls[i + 1]
+    };
+    let res;
+    try {
+      res = await chrome.runtime.sendMessage({ type: "translate", request });
+    } catch (err) {
+      res = { ok: false, kind: "down", error: "Extension indisponible : " + (err?.message || err) };
+    }
+    if (gen !== generation) return;
+    inFlight--;
+    if (res?.ok) {
+      up.done++;
+    } else if (["down", "token", "busy"].includes(res?.kind)) {
+      up.pending.unshift(i); // reprise avec la file
+      suspend(res);
+    } else {
+      // Erreur ou délai dépassé : l'image sera traduite à l'ouverture de l'épisode.
+      up.failed++;
+    }
+    pump();
+  }
+
+  // --- Signalement d'une bulle (Alt+clic) ---
+
+  // Le serveur enregistre la bulle, ses lignes OCR et une découpe de l'image, pour
+  // constituer un corpus d'échecs (scripts/reports.py en fait un rapport HTML).
+  async function report(e, b, el) {
+    if (el.dataset.report) return; // déjà signalée, ou envoi en cours
+    el.dataset.report = "sending";
+    const request = {
+      image_url: e.url,
+      series_id: episode.seriesId,
+      episode_id: episode.episodeId,
+      index: e.index,
+      prev_image_url: order[e.index - 1]?.url,
+      next_image_url: order[e.index + 1]?.url,
+      box: b.box,
+      original: b.original,
+      translated: b.translated
+    };
+    let res;
+    try {
+      res = await chrome.runtime.sendMessage({ type: "report", request });
+    } catch (err) {
+      res = { ok: false, error: "Extension indisponible : " + (err?.message || err) };
+    }
+    if (!el.isConnected) return; // page remise à zéro entre-temps
+    if (res?.ok) {
+      el.dataset.report = "done";
+      showNotice("Bulle signalée", "");
+    } else {
+      delete el.dataset.report;
+      console.warn("[Phylactère] Signalement impossible :", res?.error);
+      showNotice("Signalement impossible : " + (res?.error || "réponse vide"), "error");
+    }
+  }
+
+  function showNotice(text, state) {
+    notice = { text, state };
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { notice = null; updateBadge(); }, NOTICE_MS);
+    updateBadge();
+  }
+
   // --- Rendu des bulles ---
 
   function render(e) {
@@ -309,7 +493,16 @@
         el.style.boxShadow = `0 0 6px 3px ${b.bg}`;
       }
       // Clic : masque la bulle pour voir l'original (re-clic pour la remettre).
-      el.addEventListener("click", (ev) => { ev.stopPropagation(); el.classList.toggle("phy-peek"); });
+      // Alt+clic : signale la bulle (mauvaise lecture ou mauvaise traduction).
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (ev.altKey) {
+          ev.preventDefault();
+          report(e, b, el);
+        } else {
+          el.classList.toggle("phy-peek");
+        }
+      });
       layer.appendChild(el);
     }
     document.body.appendChild(layer);
@@ -432,6 +625,7 @@
     for (const e of entries.values()) e.layer?.remove();
     entries.clear();
     order = [];
+    upcoming = null;
     episode = currentEpisode();
     updateBadge();
     scan();
@@ -461,8 +655,12 @@
     let title = HINT;
     let state = "";
     // Mode « scroll » : une image non traduite plus bas n'est pas une panne.
+    const up = upcoming?.state === "ready" ? upcoming : null;
     if (working) {
       text += " · en cours";
+    } else if (up && up.done + up.failed < up.urls.length) {
+      text += ` · épisode suivant ${up.done}/${up.urls.length}`;
+      title = `Préchargement de l'épisode ${up.episodeId} pendant la lecture.\n${HINT}`;
     } else if (waiting) {
       text += " · en attente du défilement";
       title = `Mode défilement : ${waiting} image(s) seront traduites à l'approche ` +
@@ -484,6 +682,10 @@
       text += ` · ${errors} erreur(s)`;
       title = `${lastError}\n${HINT}`;
       state = "error";
+    }
+    if (notice && !pause) {
+      text += " · " + notice.text;
+      state = notice.state || state;
     }
     // N'écrire que ce qui change : chaque écriture est une mutation du DOM.
     text = "Phylactère · " + text;

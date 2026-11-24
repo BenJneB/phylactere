@@ -11,14 +11,21 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from phylactere.cache import Cache, TranslatedBlock, TranslationResult, sha1
-from phylactere.config import Settings
+from phylactere.config import Settings, reports_dir
 from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError, check_url, decode_image, fetch_bytes
 from phylactere.glossary import Suggestion, suggest_entries
 from phylactere.ocr import OcrEngine
 from phylactere.queue import ImagePriority, PriorityRunner
+from phylactere.reports import (
+    ReportRequest,
+    ReportResponse,
+    crop_bubble,
+    find_bubble,
+    write_report,
+)
 from phylactere.schemas import OcrResult
-from phylactere.translate import OllamaTranslator, prompt_id
+from phylactere.translate import PROMPT_VERSION, OllamaTranslator, prompt_id
 
 logger = logging.getLogger("phylactere.pipeline")
 
@@ -163,6 +170,7 @@ class Pipeline:
     # --- OCR ---
 
     async def _ocr_result(self, request: TranslateRequest, timings: dict[str, int]) -> OcrResult:
+        """Résultat OCR de l'image (cache, sinon téléchargement et file OCR)."""
         key = sha1(
             json.dumps(
                 [
@@ -295,3 +303,58 @@ class Pipeline:
             _ms(start),
         )
         return SuggestResponse(entries=entries, bubbles=len(bubbles))
+
+    # --- Signalements ---
+
+    async def report(self, request: ReportRequest) -> ReportResponse:
+        """Enregistre le signalement d'une bulle : JSON (lignes OCR, traduction, modèle)
+        et découpe PNG, dans le dossier des signalements."""
+        for url in (request.image_url, request.prev_image_url, request.next_image_url):
+            if url is not None:
+                check_url(url, self._settings.fetch)
+        lang = request.target_lang or self._settings.translation.target_lang
+        model = request.model or self._settings.ollama.model
+
+        # Mêmes voisines que /translate : le résultat OCR vient du cache (sinon il est
+        # recalculé, en priorité « visible » puisque l'utilisateur attend).
+        ocr = await self._ocr_result(
+            TranslateRequest(
+                image_url=request.image_url,
+                series_id=request.series_id,
+                episode_id=request.episode_id,
+                index=request.index,
+                priority="visible",
+                prev_image_url=request.prev_image_url,
+                next_image_url=request.next_image_url,
+            ),
+            {},
+        )
+        bubble = find_bubble(ocr, request.box)
+        data, following = await asyncio.gather(
+            self.download(request.image_url), self.download_neighbor(request.next_image_url)
+        )
+
+        def save() -> str:
+            image, _, below = decode_images(data, None, following)
+            return write_report(
+                reports_dir(),
+                request,
+                lang,
+                model,
+                {
+                    "prompt_version": PROMPT_VERSION,
+                    "prompt_id": prompt_id(self._settings.translation),
+                },
+                bubble,
+                crop_bubble(image, below, request.box),
+            )
+
+        report_id = await asyncio.to_thread(save)
+        logger.info(
+            "Signalement %s : bulle de l'image %s/%s #%d.",
+            report_id,
+            request.series_id,
+            request.episode_id,
+            request.index,
+        )
+        return ReportResponse(id=report_id, matched=bubble is not None)

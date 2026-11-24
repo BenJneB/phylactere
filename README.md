@@ -78,6 +78,8 @@ Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la pro
 
 - **Alt+T** ou clic sur le badge : afficher / masquer toutes les traductions ;
 - clic sur une bulle : la masquer pour voir l'original (re-clic pour la remettre) ; survoler une bulle affiche le texte coréen reconnu ;
+- **Alt+clic** sur une bulle mal lue ou mal traduite : la signaler (elle s'entoure d'un pointillé rouge). Le serveur garde la bulle, sa traduction et une découpe de l'image dans `%LOCALAPPDATA%\phylactere\reports\` ; `uv run python ..\scripts\reports.py --open` (depuis `server\`) en fait un rapport HTML. Ces signalements servent à régler le prompt et la lecture des bulles ;
+- en mode « Tout l'épisode », une fois l'épisode traduit et la lecture passée à 80 %, l'épisode suivant est traduit en arrière-plan (badge `épisode suivant 5/81`) : il s'affiche traduit dès son ouverture. Pas de préchargement pour un épisode payant ;
 - popup : langue cible, modèle de traduction, activation de l'extension. Changer la langue ou le modèle retraduit la page (l'OCR, déjà en cache, n'est pas refait) ;
 - popup › **Quand traduire** : « Tout l'épisode dès l'ouverture » (défaut : images à l'écran d'abord, puis le reste en arrière-plan) ou « Au fil de la lecture » (seulement les images à l'écran et les quelques suivantes, 4 par défaut, de 1 à 20). Le second mode évite de traduire tout un épisode qu'on ne fait que survoler ; le badge affiche alors `en attente du défilement` quand la suite sera traduite à l'approche. Le changement s'applique tout de suite, sans recharger la page ;
 - popup › **Vider le cache de cette série** (sur une page Naver) ou **Vider tout le cache** : les traductions seront refaites à la prochaine lecture (recharger la page). Les glossaires sont conservés.
@@ -159,6 +161,7 @@ Fichiers, tous dans `%LOCALAPPDATA%\phylactere\` :
 | `config.toml` | réglages personnels et jeton |
 | `Cache\cache.sqlite3` | traductions, résultats de l'OCR, glossaires |
 | `Cache\paddlex\` | modèles de l'OCR |
+| `reports\` | bulles signalées (Alt+clic) : un `.json` et une découpe `.png` par signalement |
 | `Logs\server.log` | journal du serveur (4 fichiers de 2 Mo au plus) |
 
 `config.toml` est créé au premier lancement avec seulement le jeton. Toutes les valeurs possibles, commentées, sont dans `server\config.example.toml` (à ne pas modifier) : copier dans `config.toml` uniquement celles à changer, dans leur section. Exemples : port (`[server] port`), langue cible par défaut (`[translation] target_lang`), appareil de l'OCR (`[ocr] device = "cpu"`). Redémarrer le serveur ensuite (`stop.ps1` puis `start.ps1`). Après un changement de port, mettre à jour l'adresse du serveur dans le popup.
@@ -198,7 +201,7 @@ Ollama utilise le GPU de son côté, indépendamment de l'OCR : `ollama ps` affi
 
 **Traduction lente en cours de lecture** : regarder dans le Gestionnaire des tâches (Performances › GPU) la « mémoire GPU partagée ». Si elle augmente pendant la traduction, la mémoire vidéo est saturée : fermer les applications gourmandes, désactiver l'accélération matérielle du navigateur, ou passer à `qwen3.5:4b`. Sur un portable : brancher le chargeur et choisir le mode d'alimentation « Meilleures performances ».
 
-**Une image reste sans traduction, ou le badge compte des erreurs** : survoler le badge affiche la dernière erreur. Recharger la page relance les images en erreur. Une image sans texte coréen n'a simplement aucune bulle.
+**Une image reste sans traduction, ou le badge compte des erreurs** : survoler le badge affiche la dernière erreur. Une image qui dépasse le délai (280 s, serveur très chargé) est redemandée deux fois avant de passer en erreur. Recharger la page relance les images en erreur. Une image sans texte coréen n'a simplement aucune bulle.
 
 **Bulles mal placées, ratées ou mal traduites** : voir « Limites connues ». Le glossaire corrige les noms propres ; vider le cache de la série puis recharger la page refait les traductions.
 

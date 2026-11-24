@@ -42,6 +42,7 @@ from phylactere.pipeline import (
     TranslateResponse,
     decode_images,
 )
+from phylactere.reports import ReportRequest, ReportResponse
 from phylactere.schemas import OcrResult
 from phylactere.translate import OllamaTranslator
 
@@ -172,6 +173,12 @@ def create_app(
     async def translate(request: Request, body: TranslateRequest) -> TranslateResponse:
         """OCR et traduction des bulles d'une image de l'épisode."""
         return await request.app.state.pipeline.translate(body)
+
+    @protected.post("/report")
+    async def report(request: Request, body: ReportRequest) -> ReportResponse:
+        """Signalement d'une bulle (Alt+clic dans l'extension) : JSON et découpe PNG dans
+        le dossier des signalements, pour constituer un corpus d'échecs."""
+        return await request.app.state.pipeline.report(body)
 
     @protected.get("/glossary/{series_id}")
     async def get_glossary(request: Request, series_id: str) -> list[GlossaryEntry]:
