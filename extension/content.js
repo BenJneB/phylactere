@@ -20,6 +20,8 @@
   // et la lecture passée à 80 % de ses images.
   const NEXT_EPISODE_PROGRESS = 0.8;
   const NOTICE_MS = 4000; // durée d'un message temporaire du badge
+  // Page d'épisode sans image reconnue : diagnostic 10 s après le dernier scan (jalon 19).
+  const PAGE_CHECK_MS = 10000;
   // Échecs qui suspendent la file (serveur arrêté, jeton refusé, service pas prêt) : la
   // demande est refaite à la reprise.
   const SUSPENDING = ["down", "token", "busy"];
@@ -58,6 +60,12 @@
   let previously = null;
   let previouslyState = null;
   let summaryRequested = false;
+  // Page de Naver non reconnue (jalon 19) : { unrecognized } quand des images de l'épisode
+  // semblent être dans la page sans être reconnues, et conteneur des images introuvable
+  // (images reconnues ailleurs dans la page).
+  let pageAlert = null;
+  let pageCheckTimer = 0;
+  let viewerMissing = false;
 
   const bubbles = bubbleActions({
     ask,
@@ -139,11 +147,35 @@
   function scan() {
     if (!enabled || !episode) return;
     const list = naver.episodeImages(episode).map(({ url, img }) => track(url, img));
-    if (!list.length) return;
+    if (!list.length) {
+      // Rien de reconnu depuis l'ouverture : diagnostic quand la page ne bouge plus.
+      if (!order.length) schedulePageCheck();
+      return;
+    }
+    clearTimeout(pageCheckTimer);
+    pageAlert = null;
+    viewerMissing = !naver.viewer();
     list.forEach((e, i) => (e.index = i));
     order = list;
     updateBadge();
     pump();
+  }
+
+  // Diagnostic PAGE_CHECK_MS après le dernier scan sans résultat : des images de l'épisode
+  // non reconnues → badge d'alerte ; aucune (épisode verrouillé, payant) → pas de badge.
+  function schedulePageCheck() {
+    clearTimeout(pageCheckTimer);
+    const gen = generation;
+    pageCheckTimer = setTimeout(() => {
+      if (gen !== generation || order.length) return;
+      const { unrecognized } = naver.diagnose(episode);
+      pageAlert = unrecognized ? { unrecognized } : null;
+      if (pageAlert) {
+        console.warn(`[Phylactère] Page non reconnue : ${unrecognized} grande(s) image(s) ` +
+          "de Naver sans le format d'adresse attendu.");
+      }
+      updateBadge();
+    }, PAGE_CHECK_MS);
   }
 
   // Entrée : { url, img, index, status: "queued" | "working" | "done" | "error",
@@ -582,7 +614,13 @@
     removePreviously();
     previouslyState = null;
     summaryRequested = false;
+    clearTimeout(pageCheckTimer);
+    pageAlert = null;
+    viewerMissing = false;
     episode = naver.currentEpisode();
+    // Script d'état de la page chargée (après une navigation sans rechargement, il est lu
+    // dans la page téléchargée, au moment de s'en servir).
+    if (enabled && episode && episode.episodeId === loadedEpisodeId) naver.checkState(document);
     updateBadge();
     scan();
     loadPreviously();
@@ -595,11 +633,19 @@
   }
 
   function updateBadge() {
-    if (!enabled || !episode || !order.length) {
+    if (!enabled || !episode || (!order.length && !pageAlert)) {
       badge.remove();
       return;
     }
     if (!badge.isConnected) document.body.appendChild(badge);
+    if (!order.length) {
+      writeBadge("Phylactère · Page non reconnue (Naver a changé ?)",
+        `${pageAlert.unrecognized} grande(s) image(s) de ${naver.IMG_HOST} dans la page, ` +
+        "mais aucune n'a l'adresse attendue pour une image de cet épisode.\n" +
+        "Naver a sans doute changé sa page : mettez à jour l'extension (extension\\naver.js), " +
+        "ou signalez le problème.", "error");
+      return;
+    }
     const win = readingWindow();
     let done = 0, errors = 0, lastError = "", working = 0, waiting = 0;
     for (const e of order) {
@@ -644,8 +690,15 @@
       text += " · " + notice.text;
       state = notice.state || state;
     }
-    // N'écrire que ce qui change : chaque écriture est une mutation du DOM.
-    text = "Phylactère · " + text;
+    if (viewerMissing) {
+      title = `Conteneur des images (${naver.VIEWER}) introuvable : images cherchées dans ` +
+        `toute la page (Naver a changé ?).\n${title}`;
+    }
+    writeBadge("Phylactère · " + text, title, state);
+  }
+
+  // N'écrire que ce qui change : chaque écriture est une mutation du DOM.
+  function writeBadge(text, title, state) {
     if (badge.textContent !== text) badge.textContent = text;
     if (badge.title !== title) badge.title = title;
     if (badge.dataset.state !== state) badge.dataset.state = state;

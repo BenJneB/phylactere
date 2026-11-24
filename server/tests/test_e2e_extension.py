@@ -1,4 +1,4 @@
-"""Tests de bout en bout de l'extension (jalons 7, 8 et 10 à 15).
+"""Tests de bout en bout de l'extension (jalons 7, 8, 10 à 15 et 19).
 
 Chromium (Playwright) charge l'extension non empaquetée, ouvre une fausse page d'épisode
 Naver et parle à un vrai serveur Phylactère lancé dans un thread, dont l'OCR, Ollama et le
@@ -73,14 +73,25 @@ def expected_text(episode: int, index: int) -> str:
     return f"FR:가{episode}-{index}"
 
 
-def page_html(episode: int, next_no: int | None = None, prev_no: int | None = None) -> str:
+def page_html(
+    episode: int,
+    next_no: int | None = None,
+    prev_no: int | None = None,
+    *,
+    image_src=image_url,
+    count: int = IMAGE_COUNT,
+    container: str = "sectionContWide",
+) -> str:
     """Page d'épisode minimale, reprise de la structure réelle de Naver : la vignette (même
     dossier que les images, à ignorer) puis les images dans #sectionContWide. Le lien
     « suivant » change d'épisode sans recharger la page.
 
     ``next_no`` : ajoute le script d'état de Naver (``window.__state__``) qui annonce
     l'épisode suivant, déclencheur du préchargement de cet épisode (jalon 11). ``prev_no`` :
-    l'épisode précédent (``prevArticle``), dont le résumé est affiché (jalon 15)."""
+    l'épisode précédent (``prevArticle``), dont le résumé est affiché (jalon 15).
+
+    Page que Naver aurait changée (jalon 19) : ``image_src`` (URL de l'image ``i``),
+    ``count`` (nombre d'images) et ``container`` (identifiant du conteneur des images)."""
     articles = ""
     if prev_no is not None:
         articles += f"""
@@ -105,16 +116,16 @@ window.__state__ = {{
         else ""
     )
     images = "\n".join(
-        f'<img id="content_image_{i}" src="{image_url(episode, i)}" '
+        f'<img id="content_image_{i}" src="{image_src(episode, i)}" '
         f'width="{IMAGE_W}" height="{IMAGE_H}" style="display:block">'
-        for i in range(IMAGE_COUNT)
+        for i in range(count)
     )
     return f"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><title>Épisode {episode}</title>{state}</head>
 <body style="margin:0">
 <img id="thumb" src="https://image-comic.pstatic.net/webtoon/{SERIES}/{episode}/thumbnail_202x120.png">
 <a id="next" href="#">suivant</a>
-<div id="sectionContWide" style="width:{IMAGE_W}px">
+<div id="{container}" style="width:{IMAGE_W}px">
 {images}
 </div>
 <script>
@@ -122,7 +133,7 @@ document.getElementById("next").addEventListener("click", (ev) => {{
   ev.preventDefault();
   const no = {episode} + 1;
   history.pushState({{}}, "", "/webtoon/detail?titleId={SERIES}&no=" + no);
-  document.querySelectorAll("#sectionContWide img").forEach((img, i) => {{
+  document.querySelectorAll("#{container} img").forEach((img, i) => {{
     img.src = "https://image-comic.pstatic.net/webtoon/{SERIES}/" + no + "/img_" + i + ".png";
   }});
 }});
@@ -1034,3 +1045,118 @@ def test_popup_exports_pdf_once_episode_is_translated(browser, server, world):
     assert downloads[0]["mime"] == "application/pdf"
     assert downloads[0]["state"] == "complete"
     assert Path(downloads[0]["filename"]).read_bytes().startswith(b"%PDF")
+
+
+# --- Jalon 19 : page de Naver non reconnue ---
+
+PAGE_ALERT = "Phylactère · Page non reconnue (Naver a changé ?)"
+
+
+def serve_page(context, **options) -> None:
+    """Pages d'épisode modifiées comme si Naver avait changé sa page (voir page_html)."""
+
+    def serve(route):
+        no = int(re.search(r"no=(\d+)", route.request.url).group(1))
+        route.fulfill(content_type="text/html; charset=utf-8", body=page_html(no, **options))
+
+    context.route("https://comic.naver.com/**", serve)
+
+
+def test_unrecognized_image_urls_raise_page_alert(browser, server, world):
+    """Grandes images de image-comic.pstatic.net dont l'URL n'a plus le format attendu :
+    badge d'alerte, 10 s après le dernier scan, et rien n'est envoyé au serveur."""
+    context, worker = browser
+
+    def moved(episode: int, index: int) -> str:
+        return f"https://image-comic.pstatic.net/webtoon/{SERIES}/{episode}-img_{index}.png"
+
+    serve_page(context, image_src=moved)
+    context.route(
+        "https://image-comic.pstatic.net/**",
+        lambda route: route.fulfill(content_type="image/png", body=image_png(66, 0)),
+    )
+    server.start()
+    configure(worker, server.port, server.token)
+    page = open_episode(context)
+    badge = page.locator(BADGE)
+
+    page.wait_for_timeout(3000)  # pas encore de diagnostic : la page charge peut-être
+    expect(badge).to_have_count(0)
+    expect(badge).to_have_text(PAGE_ALERT, timeout=15_000)
+    expect(badge).to_have_attribute("data-state", "error")
+    expect(badge).to_have_attribute(
+        "title", re.compile(r"^12 grande\(s\) image\(s\) .*mettez à jour", re.S)
+    )
+    assert world.calls == []
+
+
+def test_no_episode_image_means_no_badge(browser, server, world):
+    """Épisode verrouillé ou payant : aucune grande image de Naver (seulement la vignette),
+    donc pas d'alerte, et pas de badge."""
+    context, worker = browser
+    serve_page(context, count=0)
+    server.start()
+    configure(worker, server.port, server.token)
+    page = open_episode(context)
+
+    page.wait_for_timeout(12_000)
+    expect(page.locator(BADGE)).to_have_count(0)
+    assert world.calls == []
+
+
+def test_renamed_container_still_translates(browser, server):
+    """Conteneur des images renommé : repli sur toute la page (la vignette reste ignorée),
+    les bulles sont posées et l'infobulle du badge le mentionne."""
+    context, worker = browser
+    serve_page(context, container="viewerNew")
+    server.start()
+    configure(worker, server.port, server.token)
+    page = open_episode(context)
+    badge = page.locator(BADGE)
+
+    expect(page.locator(BUBBLE)).to_have_count(IMAGE_COUNT, timeout=30_000)
+    expect(badge).to_have_text(f"Phylactère · Traduit · {IMAGE_COUNT}/{IMAGE_COUNT}")
+    expect(badge).to_have_attribute(
+        "title", re.compile(r"^Conteneur des images \(#sectionContWide\) introuvable")
+    )
+    expect(badge).not_to_have_attribute("data-state", "error")
+    assert all(index < IMAGE_COUNT for _, index, _ in server.world.calls)
+
+
+def test_missing_state_script_warns_once(browser, server):
+    """Sans script d'état (window.__state__), un seul avertissement dans la console, même
+    quand le préchargement de l'épisode suivant le cherche à son tour ; aucune erreur
+    JavaScript. Avec le script d'état, aucun avertissement."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token)
+
+    def watch(page) -> tuple[list[str], list[str]]:
+        warnings: list[str] = []
+        errors: list[str] = []
+        page.on("console", lambda m: m.type == "warning" and warnings.append(m.text))
+        page.on("console", lambda m: m.type == "error" and errors.append(m.text))
+        page.on("pageerror", lambda err: errors.append(str(err)))
+        return warnings, errors
+
+    # Avec le script d'état (épisodes précédent et suivant) : aucun avertissement.
+    serve_with_state(context)
+    page = context.new_page()
+    warnings, errors = watch(page)
+    page.goto(episode_url(66))
+    expect(page.locator(BUBBLE)).to_have_count(IMAGE_COUNT, timeout=30_000)
+    page.wait_for_timeout(500)
+    assert not [w for w in warnings if "__state__" in w]
+    page.close()
+
+    # Sans script d'état : un avertissement à l'ouverture, pas un de plus à la fin de la
+    # lecture (préchargement de l'épisode suivant).
+    serve_page(context)
+    page = context.new_page()
+    warnings, errors = watch(page)
+    page.goto(episode_url(66))
+    expect(page.locator(BUBBLE)).to_have_count(IMAGE_COUNT, timeout=30_000)
+    page.locator("#content_image_11").scroll_into_view_if_needed()
+    page.wait_for_timeout(1500)
+    assert len([w for w in warnings if "[Phylactère]" in w and "__state__" in w]) == 1
+    assert errors == []
