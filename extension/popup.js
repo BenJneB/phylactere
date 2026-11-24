@@ -65,6 +65,7 @@ $("grant").addEventListener("click", async () => {
 async function refresh() {
   const health = await refreshHealth();
   if (!health?.ok) return;
+  refreshStats();
   const res = await send({ type: "models" });
   if (res?.ok) {
     setModels((res.data.models || []).map((m) => m.name), health.data.model);
@@ -151,12 +152,67 @@ $("save").addEventListener("click", async () => {
   refresh();
 });
 
+// --- Statistiques (GET /stats) ---
+
+const number = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
+const megabytes = (bytes) => `${number.format(bytes / 1_000_000)} Mo`;
+const seconds = (ms) => `${number.format(ms / 1000)} s`;
+
+function duration(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h ? `${h} h ${String(m).padStart(2, "0")}` : `${m} min`;
+}
+
+// Taille du cache sur le bouton de vidage, détail dans la section repliable.
+async function refreshStats() {
+  const res = await send({ type: "stats" });
+  const box = $("stats");
+  if (!res?.ok) {
+    $("clear").textContent = "Vider tout le cache";
+    box.replaceChildren();
+    $("statsBox").hidden = true;
+    return;
+  }
+  const st = res.data;
+  $("statsBox").hidden = false;
+  $("clear").textContent = `Vider tout le cache (${megabytes(st.cache.size_bytes)})`;
+
+  const rows = [];
+  const limit = st.cache.max_bytes ? ` sur ${megabytes(st.cache.max_bytes)}` : " (sans limite)";
+  rows.push(["Cache", megabytes(st.cache.size_bytes) + limit]);
+  rows.push(["En cache", `${st.cache.ocr} image(s) lue(s), ${st.cache.translations} traduction(s), ${st.cache.glossaries} glossaire(s)`]);
+  const share = st.images.served ? Math.round((100 * st.images.cached) / st.images.served) : 0;
+  rows.push([`Depuis ${duration(st.uptime_s)}`, `${st.images.served} image(s) servie(s), ${share} % depuis le cache`]);
+  const labels = { fetch: "Téléchargement", ocr: "OCR", translate: "Traduction" };
+  for (const [phase, label] of Object.entries(labels)) {
+    const t = st.timings_ms[phase];
+    rows.push([label, t?.count ? `${seconds(t.avg_ms)} en moyenne, ${seconds(t.max_ms)} au plus (${t.count} image(s))` : "—"]);
+  }
+  for (const [name, label] of [["ocr", "File OCR"], ["translation", "File traduction"]]) {
+    const q = st.queues[name];
+    const waiting = q.visible + q.prefetch + q.background;
+    const detail = waiting ? ` (${q.visible} visible(s), ${q.prefetch} en avance, ${q.background} de fond)` : "";
+    rows.push([label, `${q.running ? "1 en cours, " : ""}${waiting} en attente${detail}`]);
+  }
+  rows.push(["Modèle", `${st.model} · ${st.device.toUpperCase()}`]);
+
+  box.replaceChildren(...rows.flatMap(([term, value]) => {
+    const dt = document.createElement("dt");
+    dt.textContent = term;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    return [dt, dd];
+  }));
+}
+
 // Les pages déjà affichées gardent leurs bulles : recharger la page pour retraduire.
 async function clearCache(seriesId) {
   const res = await send({ type: "clear-cache", seriesId });
   if (!res?.ok) return status(res?.error ?? "Échec.", "err");
   const what = seriesId ? `Cache de la série ${seriesId} vidé` : "Cache vidé";
   status(`${what} (${res.data.removed} entrée(s)). Rechargez la page pour retraduire.`);
+  refreshStats();
 }
 
 $("clear").addEventListener("click", () => clearCache());

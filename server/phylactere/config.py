@@ -102,6 +102,11 @@ class FetchConfig(_Section):
 
 class CacheConfig(_Section):
     path: str
+    # Taille maximale du fichier, en Mo (0 = sans limite).
+    max_mb: int = Field(ge=0)
+
+    def max_bytes(self) -> int:
+        return self.max_mb * 1_000_000
 
     def resolved_path(self) -> Path:
         return Path(self.path) if self.path else cache_dir() / "cache.sqlite3"

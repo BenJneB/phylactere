@@ -15,6 +15,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     "report-cancel": () => call(`/report/${encodeURIComponent(msg.id)}`, { method: "DELETE" }),
     health: () => health(),
     models: () => models(),
+    stats: () => call("/stats"),
     "clear-cache": () => clearCache(msg.seriesId),
     "glossary-get": () => call(`/glossary/${encodeURIComponent(msg.seriesId)}`),
     "glossary-put": () => putGlossary(msg.seriesId, msg.entries)

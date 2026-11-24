@@ -82,7 +82,10 @@ Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la pro
 - en mode « Tout l'épisode », une fois l'épisode traduit et la lecture passée à 80 %, l'épisode suivant est traduit en arrière-plan (badge `épisode suivant 5/81`) : il s'affiche traduit dès son ouverture. Pas de préchargement pour un épisode payant ;
 - popup : langue cible, modèle de traduction, activation de l'extension. Changer la langue ou le modèle retraduit la page (l'OCR, déjà en cache, n'est pas refait) ;
 - popup › **Quand traduire** : « Tout l'épisode dès l'ouverture » (défaut : images à l'écran d'abord, puis le reste en arrière-plan) ou « Au fil de la lecture » (seulement les images à l'écran et les quelques suivantes, 4 par défaut, de 1 à 20). Le second mode évite de traduire tout un épisode qu'on ne fait que survoler ; le badge affiche alors `en attente du défilement` quand la suite sera traduite à l'approche. Le changement s'applique tout de suite, sans recharger la page ;
-- popup › **Vider le cache de cette série** (sur une page Naver) ou **Vider tout le cache** : les traductions seront refaites à la prochaine lecture (recharger la page). Les glossaires sont conservés.
+- popup › **Vider le cache de cette série** (sur une page Naver) ou **Vider tout le cache** : les traductions seront refaites à la prochaine lecture (recharger la page). Les glossaires sont conservés. Le bouton affiche la taille du cache ;
+- popup › **Statistiques** (section repliable) : taille du cache, images servies depuis le lancement du serveur et part venue du cache, temps moyens et maximaux de téléchargement, d'OCR et de traduction, tâches en attente.
+
+Le cache est limité à 500 Mo (`max_mb` de la section `[cache]` de `config.toml`, 0 = sans limite) : au-delà, les images lues le moins récemment sont oubliées (elles seront refaites si on les relit). Les glossaires ne sont jamais oubliés. Au premier lancement de cette version, un cache existant est réécrit une fois pour pouvoir rétrécir : le démarrage peut prendre quelques secondes de plus.
 
 ## Démarrage automatique (optionnel)
 

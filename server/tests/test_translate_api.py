@@ -271,3 +271,40 @@ def test_translation_cached_before_colors_has_no_colors():
     }
     block = TranslationResult.model_validate(old).blocks[0]
     assert (block.bg, block.fg) == (None, None)
+
+
+# --- Statistiques (jalon 12) ---
+
+
+def test_stats_requires_token(client):
+    assert client.get("/stats", headers={TOKEN_HEADER: "mauvais"}).status_code == 401
+
+
+def test_stats_counts_images_cache_and_timings(client, world):
+    client.post("/translate", json=request(0))
+    client.post("/translate", json=request(0))  # depuis le cache
+    client.post("/translate", json=request(1, target_lang="en"))
+    client.post("/translate", json=request(1, target_lang="de"))  # OCR en cache
+
+    body = client.get("/stats").json()
+
+    assert body["images"] == {"served": 4, "cached": 1}
+    # Téléchargement et OCR : seulement pour les images vraiment lues (pas l'OCR en cache).
+    assert body["timings_ms"]["fetch"]["count"] == 2
+    assert body["timings_ms"]["ocr"]["count"] == 2
+    assert body["timings_ms"]["translate"]["count"] == 3
+    timing = body["timings_ms"]["translate"]
+    assert 0 <= timing["avg_ms"] <= timing["max_ms"]
+    assert body["cache"]["ocr"] == 2
+    assert body["cache"]["translations"] == 3
+    assert body["cache"]["glossaries"] == 0
+    assert body["cache"]["size_bytes"] > 0
+    assert body["cache"]["max_bytes"] == load_settings().cache.max_mb * 1_000_000
+    assert body["queues"]["translation"] == {
+        "visible": 0,
+        "prefetch": 0,
+        "background": 0,
+        "running": 0,
+    }
+    assert body["model"] == load_settings().ollama.model
+    assert body["uptime_s"] >= 0

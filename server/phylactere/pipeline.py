@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 import httpx
 from PIL import Image
@@ -31,6 +31,9 @@ logger = logging.getLogger("phylactere.pipeline")
 
 # Images gardées en mémoire : une image sert aussi de voisine aux deux images adjacentes.
 IMAGE_MEMORY = 64
+# Statistiques (GET /stats) : temps des N dernières images calculées.
+TIMINGS_WINDOW = 50
+PHASES = ("fetch", "ocr", "translate")
 
 
 class TranslateRequest(ImageRequest):
@@ -40,6 +43,41 @@ class TranslateRequest(ImageRequest):
 class TranslateResponse(TranslationResult):
     cached: bool
     timings_ms: dict[str, int]
+
+
+class PhaseTimings(BaseModel):
+    """Temps d'une étape sur les dernières images où elle a vraiment tourné (attente en
+    file comprise pour l'OCR et la traduction)."""
+
+    count: int
+    avg_ms: int
+    max_ms: int
+
+
+class ImageStats(BaseModel):
+    # Réponses à /translate depuis le démarrage, et parmi elles celles venues du cache.
+    served: int
+    cached: int
+
+
+class CacheStats(BaseModel):
+    size_bytes: int
+    max_bytes: int  # 0 = sans limite
+    ocr: int
+    translations: int
+    glossaries: int
+
+
+class Stats(BaseModel):
+    version: str
+    uptime_s: int
+    model: str
+    device: str
+    images: ImageStats
+    timings_ms: dict[str, PhaseTimings]
+    # Tâches en file par priorité (visible, prefetch, background) et en cours (running).
+    queues: dict[str, dict[str, int]]
+    cache: CacheStats
 
 
 class SuggestRequest(BaseModel):
@@ -113,6 +151,12 @@ class Pipeline:
         self._downloads: dict[str, asyncio.Task[bytes]] = {}
         self.ocr_queue = PriorityRunner("ocr")
         self.translation_queue = PriorityRunner("translation")
+        self._started = time.monotonic()
+        self._served = 0
+        self._served_cached = 0
+        self._timings: dict[str, deque[int]] = {
+            phase: deque(maxlen=TIMINGS_WINDOW) for phase in PHASES
+        }
 
     def start(self) -> None:
         self.ocr_queue.start()
@@ -121,6 +165,34 @@ class Pipeline:
     async def stop(self) -> None:
         await self.ocr_queue.stop()
         await self.translation_queue.stop()
+
+    # --- Statistiques ---
+
+    def _record(self, phase: str, ms: int) -> None:
+        self._timings[phase].append(ms)
+
+    async def stats(self, version: str, device: str) -> Stats:
+        timings = {
+            phase: PhaseTimings(
+                count=len(values),
+                avg_ms=round(sum(values) / len(values)) if values else 0,
+                max_ms=max(values, default=0),
+            )
+            for phase, values in self._timings.items()
+        }
+        return Stats(
+            version=version,
+            uptime_s=round(time.monotonic() - self._started),
+            model=self._settings.ollama.model,
+            device=device,
+            images=ImageStats(served=self._served, cached=self._served_cached),
+            timings_ms=timings,
+            queues={
+                "ocr": self.ocr_queue.snapshot(),
+                "translation": self.translation_queue.snapshot(),
+            },
+            cache=CacheStats(**await self._cache.stats()),
+        )
 
     # --- Téléchargement (mémoire + fusion des téléchargements simultanés) ---
 
@@ -198,12 +270,14 @@ class Pipeline:
             self.download_neighbor(request.next_image_url),
         )
         timings["fetch"] = _ms(start)
+        self._record("fetch", timings["fetch"])
 
         # Décodage dans la tâche de la file : une demande fusionnée avec une autre ne
         # décode rien, et la tâche en attente ne garde que les octets.
         start = time.perf_counter()
         result = await self.ocr_queue.run(key, priority, lambda: self.recognize(*data))
         timings["ocr"] = _ms(start)
+        self._record("ocr", timings["ocr"])
         await self._cache.put_ocr(key, request.series_id, result)
         return result
 
@@ -216,6 +290,8 @@ class Pipeline:
 
         cached = await self._cache.get_translation(key)
         if cached is not None:
+            self._served += 1
+            self._served_cached += 1
             return TranslateResponse(**dict(cached), cached=True, timings_ms=timings)
 
         ocr = await self._ocr_result(request, request.priority, timings)
@@ -240,6 +316,8 @@ class Pipeline:
                 lambda: self._translator.translate(texts, lang, context, glossary, model),
             )
         timings["translate"] = _ms(start)
+        if texts:
+            self._record("translate", timings["translate"])
 
         result = TranslationResult(
             blocks=[
@@ -270,6 +348,7 @@ class Pipeline:
             len(result.blocks),
             timings,
         )
+        self._served += 1
         return TranslateResponse(**dict(result), cached=False, timings_ms=timings)
 
     # --- Propositions de glossaire ---

@@ -36,6 +36,7 @@ from phylactere.fetch import FetchError, decode_image
 from phylactere.ocr import OcrEngine
 from phylactere.pipeline import (
     Pipeline,
+    Stats,
     SuggestRequest,
     SuggestResponse,
     TranslateRequest,
@@ -112,7 +113,7 @@ def create_app(
         ):
             app.state.ollama = ollama
             app.state.images = images
-            cache = Cache(settings.cache.resolved_path())
+            cache = Cache(settings.cache.resolved_path(), settings.cache.max_bytes())
             translator = OllamaTranslator(ollama, settings.ollama, settings.translation)
             pipeline = Pipeline(settings, images, engine, translator, cache)
             pipeline.start()
@@ -120,10 +121,14 @@ def create_app(
             app.state.pipeline = pipeline
             # Charge le modèle de traduction pendant que l'utilisateur ouvre l'épisode.
             preload = asyncio.create_task(translator.preload())
+            # Ramène le cache sous sa taille maximale (réglage abaissé depuis le dernier
+            # lancement) ; ensuite, toutes les PURGE_EVERY écritures.
+            purge = asyncio.create_task(cache.purge())
             try:
                 yield
             finally:
                 preload.cancel()
+                await asyncio.gather(purge, return_exceptions=True)
                 await pipeline.stop()
                 cache.close()
                 engine.close()
@@ -171,6 +176,11 @@ def create_app(
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, f"Ollama injoignable : {exc}"
             ) from exc
+
+    @protected.get("/stats")
+    async def stats(request: Request) -> Stats:
+        """Cache, temps moyens et files d'attente, pour le popup de l'extension."""
+        return await request.app.state.pipeline.stats(__version__, request.app.state.ocr.device)
 
     @protected.post("/translate")
     async def translate(request: Request, body: TranslateRequest) -> TranslateResponse:

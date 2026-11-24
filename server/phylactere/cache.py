@@ -6,6 +6,8 @@
   garde la série, l'épisode et l'index pour fournir le contexte (bulles précédentes).
 - Glossaires : une liste d'entrées par série. Le modifier efface seulement les traductions
   des images qui mentionnent un terme ajouté, retiré ou modifié.
+- Taille bornée (jalon 12) : au-delà de ``max_bytes``, les entrées OCR et traductions les
+  moins récemment utilisées (colonne ``used``) sont supprimées ; jamais les glossaires.
 
 sqlite3 est synchrone : les appels passent par un thread (asyncio.to_thread), protégés par
 un verrou (une seule connexion).
@@ -15,6 +17,7 @@ import asyncio
 import functools
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -23,6 +26,8 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from phylactere.schemas import Box, Edge, ImageSize, OcrResult
+
+logger = logging.getLogger("phylactere.cache")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ocr (
@@ -48,6 +53,17 @@ CREATE TABLE IF NOT EXISTS glossary (
     entries TEXT NOT NULL
 );
 """
+
+# Tables purgées quand le cache dépasse sa taille maximale (pas les glossaires).
+PURGEABLE = ("ocr", "translation")
+# Une purge est tentée toutes les PURGE_EVERY écritures, et descend à PURGE_TARGET du
+# maximum pour ne pas se relancer à chaque écriture.
+PURGE_EVERY = 100
+PURGE_TARGET = 0.9
+# Entrées lues d'un coup pendant une purge (la taille est remesurée après chacune).
+PURGE_BATCH = 50
+# Valeur de PRAGMA auto_vacuum pour le mode INCREMENTAL.
+AUTO_VACUUM_INCREMENTAL = 2
 
 
 def sha1(text: str) -> str:
@@ -111,16 +127,21 @@ def _threaded(func):
 
 
 class Cache:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, max_bytes: int = 0) -> None:
+        """``max_bytes`` : taille maximale du fichier (0 = sans limite)."""
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.max_bytes = max_bytes
+        self._writes = 0
         self._lock = threading.Lock()
         self._db = sqlite3.connect(path, check_same_thread=False)
         with self._lock:
+            self._enable_incremental_vacuum()
             self._db.execute("PRAGMA journal_mode=WAL")
             # En WAL, NORMAL évite un fsync par écriture sans risque de corruption ; une
             # coupure de courant peut perdre les dernières entrées : acceptable pour un cache.
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
+            self._add_used_columns()
             self._db.commit()
         # Version du glossaire de chaque série, incrémentée à chaque enregistrement : une
         # traduction commencée avec l'ancien glossaire n'est pas mise en cache (voir
@@ -131,27 +152,133 @@ class Cache:
         with self._lock:
             self._db.close()
 
+    # --- Taille bornée ---
+
+    def _enable_incremental_vacuum(self) -> None:
+        """Sans auto_vacuum, SQLite garde la place des entrées supprimées : le fichier ne
+        rapetisse jamais. Une base neuve prend le mode tout de suite ; une base existante
+        (d'avant le jalon 12) doit être réécrite une fois par VACUUM."""
+        (mode,) = self._db.execute("PRAGMA auto_vacuum").fetchone()
+        if mode == AUTO_VACUUM_INCREMENTAL:
+            return
+        self._db.execute(f"PRAGMA auto_vacuum = {AUTO_VACUUM_INCREMENTAL}")
+        (tables,) = self._db.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+        if tables:
+            logger.info("Conversion du cache pour pouvoir le réduire (une seule fois)…")
+            self._db.execute("VACUUM")
+
+    def _add_used_columns(self) -> None:
+        """Colonne ``used`` (dernière utilisation), absente des bases d'avant le jalon 12 :
+        on y reprend la date de création."""
+        for table in PURGEABLE:
+            columns = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
+            if "used" not in columns:
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN used REAL")
+                self._db.execute(f"UPDATE {table} SET used = created")
+
+    def _size(self, live: bool = False) -> int:
+        """Taille du fichier en octets ; ``live`` : sans les pages libres (place récupérable)."""
+        (pages,) = self._db.execute("PRAGMA page_count").fetchone()
+        (page_size,) = self._db.execute("PRAGMA page_size").fetchone()
+        if live:
+            (free,) = self._db.execute("PRAGMA freelist_count").fetchone()
+            pages -= free
+        return pages * page_size
+
+    def _shrink(self) -> None:
+        """Rend au disque la place des entrées supprimées (fichier principal et journal WAL)."""
+        self._db.execute("PRAGMA incremental_vacuum").fetchall()
+        self._db.commit()
+        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+
+    def _purge(self) -> int:
+        """Supprime les entrées les moins récemment utilisées tant que le cache dépasse
+        PURGE_TARGET × max_bytes. Renvoie le nombre d'entrées supprimées."""
+        if not self.max_bytes or self._size(live=True) <= self.max_bytes:
+            return 0
+        target = self.max_bytes * PURGE_TARGET
+        removed = 0
+        while self._size(live=True) > target:
+            rows = self._db.execute(
+                "SELECT 'ocr', key, used FROM ocr UNION ALL"
+                " SELECT 'translation', key, used FROM translation"
+                " ORDER BY used LIMIT ?",
+                (PURGE_BATCH,),
+            ).fetchall()
+            if not rows:
+                break  # plus rien à purger (glossaires seuls, ou maximum minuscule)
+            # Une entrée à la fois : la place libérée se lit tout de suite dans
+            # freelist_count, avant même le commit.
+            for table, key, _ in rows:
+                self._db.execute(f"DELETE FROM {table} WHERE key = ?", (key,))
+                removed += 1
+                if self._size(live=True) <= target:
+                    break
+        self._db.commit()
+        self._shrink()
+        logger.info(
+            "Cache réduit : %d entrée(s) supprimée(s), %.1f Mo.",
+            removed,
+            self._size() / 1_000_000,
+        )
+        return removed
+
+    purge = _threaded(_purge)
+
+    def _wrote(self) -> None:
+        """À appeler après chaque écriture d'une entrée purgeable."""
+        self._writes += 1
+        if self._writes % PURGE_EVERY == 0:
+            self._purge()
+
+    def _touch(self, table: str, key: str) -> None:
+        self._db.execute(f"UPDATE {table} SET used = ? WHERE key = ?", (time.time(), key))
+        self._db.commit()
+
+    @_threaded
+    def stats(self) -> dict[str, int]:
+        counts = {
+            table: self._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("ocr", "translation", "glossary")
+        }
+        return {
+            "size_bytes": self._size(),
+            "max_bytes": self.max_bytes,
+            "ocr": counts["ocr"],
+            "translations": counts["translation"],
+            "glossaries": counts["glossary"],
+        }
+
     # --- OCR ---
 
     @_threaded
     def get_ocr(self, key: str) -> OcrResult | None:
         row = self._db.execute("SELECT result FROM ocr WHERE key = ?", (key,)).fetchone()
-        return OcrResult.model_validate_json(row[0]) if row else None
+        if row is None:
+            return None
+        self._touch("ocr", key)
+        return OcrResult.model_validate_json(row[0])
 
     @_threaded
     def put_ocr(self, key: str, series_id: str, result: OcrResult) -> None:
+        now = time.time()
         self._db.execute(
-            "INSERT OR REPLACE INTO ocr VALUES (?, ?, ?, ?)",
-            (key, series_id, result.model_dump_json(), time.time()),
+            "INSERT OR REPLACE INTO ocr (key, series_id, result, created, used)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (key, series_id, result.model_dump_json(), now, now),
         )
         self._db.commit()
+        self._wrote()
 
     # --- Traductions ---
 
     @_threaded
     def get_translation(self, key: str) -> TranslationResult | None:
         row = self._db.execute("SELECT result FROM translation WHERE key = ?", (key,)).fetchone()
-        return TranslationResult.model_validate_json(row[0]) if row else None
+        if row is None:
+            return None
+        self._touch("translation", key)
+        return TranslationResult.model_validate_json(row[0])
 
     def glossary_version(self, series_id: str) -> int:
         """À lire avant le glossaire, puis à passer à put_translation."""
@@ -174,8 +301,11 @@ class Cache:
         effacé les traductions concernées, elle les remettrait avec l'ancien glossaire."""
         if glossary_version is not None and glossary_version != self.glossary_version(series_id):
             return
+        now = time.time()
         self._db.execute(
-            "INSERT OR REPLACE INTO translation VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO translation"
+            " (key, series_id, episode_id, image_index, target_lang, model, result, created, used)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 key,
                 series_id,
@@ -184,10 +314,12 @@ class Cache:
                 target_lang,
                 model,
                 result.model_dump_json(),
-                time.time(),
+                now,
+                now,
             ),
         )
         self._db.commit()
+        self._wrote()
 
     @_threaded
     def context(
@@ -301,4 +433,5 @@ class Cache:
                 "DELETE FROM ocr WHERE series_id = ?", (series_id,)
             ).rowcount
         self._db.commit()
+        self._shrink()
         return removed
