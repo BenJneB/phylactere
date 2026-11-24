@@ -484,7 +484,9 @@ async def main() -> int:
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
     unknown = [v for v in variants if v not in VARIANTS]
     if unknown:
-        parser.error(f"variante(s) inconnue(s) : {', '.join(unknown)}")
+        parser.error(
+            f"variante(s) inconnue(s) : {', '.join(unknown)} (connues : {', '.join(VARIANTS)})"
+        )
     if "suivantes" in variants and "base" not in variants:
         variants.append("base")  # premier passage dont « suivantes » a besoin
     variants.sort(key=VARIANTS.index)  # « base » avant « suivantes »
@@ -492,6 +494,13 @@ async def main() -> int:
     settings = load_settings()
     series_id, episode_id, urls = episode_images(args.source)
     count = min(args.limit, len(urls))
+    if not count:
+        print(
+            "Aucune image trouvée : vérifie le dossier ou l'URL (entre guillemets sous "
+            "PowerShell, à cause du &) ; épisode payant, réservé aux adultes, ou page de "
+            "Naver modifiée ?"
+        )
+        return 1
     out_dir = ROOT / "samples" / "bench" / f"{series_id}-{episode_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
     episode = f"{series_id}-{episode_id}"
@@ -503,6 +512,9 @@ async def main() -> int:
     ocr_results, ocr_times = run_ocr(images, count, settings)
     bubbles = sum(len(r.bubbles) for r in ocr_results)
     print(f"OCR : {bubbles} bulle(s), {stats(ocr_times)['mean']} ms/image en moyenne", flush=True)
+    if not bubbles:
+        print("Aucune bulle lue : rien à traduire.")
+        return 1
 
     runs = []
     async with httpx.AsyncClient(base_url=settings.ollama.url) as client:

@@ -1,0 +1,337 @@
+{
+ "episode": "851689-1",
+ "source": "https://comic.naver.com/webtoon/detail?titleId=851689&no=1",
+ "author": "Traduction de référence rédigée par Claude (jalon 20) sur l'OCR des 40 premières images (CPU, Ubuntu) : fiable sur le sens, incertaine sur les noms propres et le titre. Genre : fantastique historique (chasseur de démons), registre ancien.",
+ "bubbles": [
+  {
+   "index": 1,
+   "original": "자네, 들었나?",
+   "reference": "Dis-moi, l'ami, tu as entendu ?",
+   "note": "Registre ancien (자네, -나) : narrateur qui s'adresse familièrement à un égal."
+  },
+  {
+   "index": 2,
+   "original": "민달팽이 머리를 한 요귀가",
+   "reference": "Un démon à tête de limace…",
+   "note": "요귀 (yogwi) : démon, esprit malfaisant. « Démon » ou une romanisation cohérente sont acceptables."
+  },
+  {
+   "index": 3,
+   "original": "일가족을 몰살시킨 이야기 말일세.",
+   "reference": "…qui a massacré toute une famille. Cette histoire-là.",
+   "note": ""
+  },
+  {
+   "index": 3,
+   "original": "흔한 요귀 이야기라 생각할 수도 있지만,",
+   "reference": "Tu vas me dire que c'est une histoire de démon comme une autre,",
+   "note": ""
+  },
+  {
+   "index": 4,
+   "original": "이 이야기는 조금 특별하다네.",
+   "reference": "mais celle-ci est un peu particulière.",
+   "note": ""
+  },
+  {
+   "index": 5,
+   "original": "왜냐하면",
+   "reference": "Parce que…",
+   "note": ""
+  },
+  {
+   "index": 6,
+   "original": "며칠뒤, 요귀의 목이",
+   "reference": "quelques jours plus tard, la tête du démon",
+   "note": ""
+  },
+  {
+   "index": 6,
+   "original": "집문에효수된채 발견됐거든.",
+   "reference": "a été retrouvée exposée sur la porte de la maison.",
+   "note": "효수 : tête coupée exposée publiquement."
+  },
+  {
+   "index": 7,
+   "original": "그 끔찍한 짓을 벌인건",
+   "reference": "Celui qui a fait cette horreur,",
+   "note": ""
+  },
+  {
+   "index": 7,
+   "original": "홀로살아남은 장남",
+   "reference": "c'est le fils aîné, le seul survivant.",
+   "note": ""
+  },
+  {
+   "index": 7,
+   "original": "나이는 고작 '열살'이라더군.",
+   "reference": "Il n'aurait que « dix ans », à ce qu'on dit.",
+   "note": ""
+  },
+  {
+   "index": 8,
+   "original": "소문에 의하면",
+   "reference": "D'après la rumeur,",
+   "note": ""
+  },
+  {
+   "index": 8,
+   "original": "'인간'이 아니라고 하네.",
+   "reference": "ce ne serait pas un « humain ».",
+   "note": ""
+  },
+  {
+   "index": 9,
+   "original": "귀수도건 도깨비의세계~",
+   "reference": "Gwisu Dogeon : le monde des dokkaebi",
+   "note": "Titre de la série (romanisation incertaine) ; 도깨비 : gobelin du folklore coréen."
+  },
+  {
+   "index": 9,
+   "original": "그림1솔티독",
+   "reference": "Dessin : Soltidok",
+   "note": "OCR : « 1 » pour la barre « | »."
+  },
+  {
+   "index": 9,
+   "original": "각색|이산책",
+   "reference": "Adaptation : Isanchaek",
+   "note": ""
+  },
+  {
+   "index": 9,
+   "original": "원작|연우솔",
+   "reference": "Œuvre originale : Yeonusol",
+   "note": ""
+  },
+  {
+   "index": 9,
+   "original": "요귀의 목을 벤 아이",
+   "reference": "L'enfant qui a tranché la tête du démon",
+   "note": "Titre de l'épisode."
+  },
+  {
+   "index": 12,
+   "original": "마을사람들이 말한곳이 여기겠군.",
+   "reference": "Ce doit être l'endroit dont parlaient les villageois.",
+   "note": ""
+  },
+  {
+   "index": 13,
+   "original": "요귀가 안쓰럽게 느껴질 줄이야.",
+   "reference": "Qui aurait cru que j'aurais pitié d'un démon…",
+   "note": ""
+  },
+  {
+   "index": 14,
+   "original": "요귀사냥꾼 몽련",
+   "reference": "Mongryeon, chasseur de démons",
+   "note": "Cartouche de présentation du personnage."
+  },
+  {
+   "index": 14,
+   "original": "녀석은 인간의 탈을 쓰고 있는 게 분명합니다!",
+   "reference": "Il a pris forme humaine, c'est certain !",
+   "note": "인간의 탈을 쓰다 : porter un masque d'humain."
+  },
+  {
+   "index": 15,
+   "original": "퇴치해 주십쇼, 요귀사냥꾼님!",
+   "reference": "Débarrassez-nous de lui, maître chasseur !",
+   "note": ""
+  },
+  {
+   "index": 15,
+   "original": "요귀가 열살짜리 아이로 둔갑했다라.",
+   "reference": "Un démon déguisé en enfant de dix ans, hein…",
+   "note": ""
+  },
+  {
+   "index": 16,
+   "original": "열살아이몇십명이 달려들어도 요귀를 죽일 수는 없다.",
+   "reference": "Même des dizaines d'enfants de dix ans ne pourraient pas tuer un démon.",
+   "note": ""
+  },
+  {
+   "index": 16,
+   "original": "게다가 요귀의목을 효수하는 잔혹함을 보면",
+   "reference": "Et vu la cruauté qu'il faut pour exposer sa tête,",
+   "note": ""
+  },
+  {
+   "index": 17,
+   "original": "이앞에 있는건.",
+   "reference": "ce qui m'attend derrière cette porte…",
+   "note": ""
+  },
+  {
+   "index": 18,
+   "original": "끼",
+   "reference": "Grii…",
+   "note": "Onomatopée 끼익 (porte qui grince), coupée en deux par l'OCR."
+  },
+  {
+   "index": 18,
+   "original": "의",
+   "reference": "…iic",
+   "note": "Suite de l'onomatopée 끼익."
+  },
+  {
+   "index": 19,
+   "original": "누구십니까.",
+   "reference": "Qui êtes-vous ?",
+   "note": "Le garçon vouvoie ; Mongryeon le tutoie."
+  },
+  {
+   "index": 20,
+   "original": "요귀사냥꾼, 몽련이라 한다.",
+   "reference": "Je m'appelle Mongryeon, chasseur de démons.",
+   "note": ""
+  },
+  {
+   "index": 20,
+   "original": "요귀사냥꾼.",
+   "reference": "Un chasseur de démons…",
+   "note": ""
+  },
+  {
+   "index": 21,
+   "original": "이소년이 마을사람들이말한 요귀.",
+   "reference": "Ce garçon, c'est le démon dont parlaient les villageois.",
+   "note": ""
+  },
+  {
+   "index": 22,
+   "original": "생기없는 눈··.",
+   "reference": "Des yeux sans vie…",
+   "note": ""
+  },
+  {
+   "index": 22,
+   "original": "마을사람들이 두려워한 이유가 이건가",
+   "reference": "C'est donc pour ça que les villageois en ont peur.",
+   "note": ""
+  },
+  {
+   "index": 23,
+   "original": "하지만 그것만으로 요귀라단정지을순 없는법.",
+   "reference": "Mais ça ne suffit pas pour affirmer que c'est un démon.",
+   "note": ""
+  },
+  {
+   "index": 23,
+   "original": "저조잡한 무덤….",
+   "reference": "Ces tombes grossières…",
+   "note": ""
+  },
+  {
+   "index": 23,
+   "original": "흙투성이인 몸을보면 이소년이 직접 만들었나 보군.",
+   "reference": "Vu la terre qui le couvre, c'est lui qui les a creusées.",
+   "note": ""
+  },
+  {
+   "index": 24,
+   "original": "그것도 오랫동안 음식도물도 섭취하지못한 채.",
+   "reference": "Et sans avoir rien mangé ni bu depuis longtemps.",
+   "note": ""
+  },
+  {
+   "index": 25,
+   "original": "특",
+   "reference": "Pof",
+   "note": "Onomatopée (objet posé), probablement 툭 mal lu."
+  },
+  {
+   "index": 26,
+   "original": "죽이다 먹도록 하거라.",
+   "reference": "C'est de la bouillie de riz. Mange.",
+   "note": "죽 : bouillie de riz ; ne pas confondre avec 죽이다 (tuer)."
+  },
+  {
+   "index": 26,
+   "original": "어째서 이런 걸 저에게.",
+   "reference": "Pourquoi me donnez-vous ça ?",
+   "note": ""
+  },
+  {
+   "index": 27,
+   "original": "마을 사람들의 요청으로 저를 퇴치하러 오신 것 아닙니까?",
+   "reference": "Vous n'êtes pas venu vous débarrasser de moi à la demande des villageois ?",
+   "note": ""
+  },
+  {
+   "index": 27,
+   "original": "마을사람들은 전부터 저를 싫어했거든요.",
+   "reference": "Ils me détestent depuis longtemps.",
+   "note": ""
+  },
+  {
+   "index": 27,
+   "original": "이 생기 없는 눈이 기분 나빳던 모양입니다.",
+   "reference": "Il faut croire que mes yeux sans vie les mettaient mal à l'aise.",
+   "note": ""
+  },
+  {
+   "index": 28,
+   "original": "게다가 '요귀'를 죽이는 모습까지 보였으니,",
+   "reference": "Et en plus, ils m'ont vu tuer un « démon »,",
+   "note": ""
+  },
+  {
+   "index": 28,
+   "original": "마을에서 내쫓고 싶은 것이겠지요.",
+   "reference": "alors ils veulent sûrement me chasser du village.",
+   "note": ""
+  },
+  {
+   "index": 28,
+   "original": "흐음.",
+   "reference": "Hmm.",
+   "note": ""
+  },
+  {
+   "index": 30,
+   "original": "듣자 하니 요귀를 죽인 건 맞는 모양인데.",
+   "reference": "À t'entendre, c'est bien toi qui as tué le démon.",
+   "note": ""
+  },
+  {
+   "index": 30,
+   "original": "그 이야기, 자세히 들을 수 있을까?",
+   "reference": "Tu veux bien me raconter ça en détail ?",
+   "note": ""
+  },
+  {
+   "index": 38,
+   "original": "요귀가 습격했을 당시 농에 숨어 있어 살아남았고,",
+   "reference": "Pendant l'attaque du démon, il a survécu caché dans un coffre,",
+   "note": "농 : coffre, armoire à linge."
+  },
+  {
+   "index": 38,
+   "original": "돌아가는 요귀를 쫓아가 거처를 알아낸 후",
+   "reference": "puis il a suivi le démon quand il est reparti et a trouvé son repaire.",
+   "note": ""
+  },
+  {
+   "index": 39,
+   "original": "집의물건을팔아 돈을 마련해",
+   "reference": "Il a vendu les affaires de la maison pour réunir de l'argent,",
+   "note": ""
+  },
+  {
+   "index": 39,
+   "original": "정보상에게서 요귀의 약점에 대한 정보를사 복수했다.",
+   "reference": "acheté à un informateur le point faible du démon, et s'est vengé.",
+   "note": ""
+  },
+  {
+   "index": 39,
+   "original": "겨우 열 살짜리 아이가 말이지.",
+   "reference": "Un gamin d'à peine dix ans.",
+   "note": ""
+  }
+ ]
+}
