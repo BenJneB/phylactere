@@ -289,6 +289,14 @@
       el.style.top = (y / nh) * 100 + "%";
       el.style.width = (w / nw) * 100 + "%";
       el.style.minHeight = (h / nh) * 100 + "%";
+      // Fond pris sur l'image par le serveur (narration sur fond coloré) ; sans couleur
+      // (fond dessiné, ou traduction en cache d'avant le jalon 9) : blanc de content.css.
+      if (b.bg) {
+        el.style.backgroundColor = b.bg;
+        el.style.color = b.fg || "#000";
+        // Ombre floue de la même couleur : adoucit le bord du rectangle sur fond uni.
+        el.style.boxShadow = `0 0 6px 3px ${b.bg}`;
+      }
       // Clic : masque la bulle pour voir l'original (re-clic pour la remettre).
       el.addEventListener("click", (ev) => { ev.stopPropagation(); el.classList.toggle("phy-peek"); });
       layer.appendChild(el);

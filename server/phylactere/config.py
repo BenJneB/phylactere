@@ -65,6 +65,8 @@ class OcrConfig(_Section):
     dedup_overlap: float = Field(gt=0, le=1)
     edge_margin: int = Field(ge=0)
     neighbor_margin: int = Field(ge=0)
+    bg_margin: int = Field(ge=0)
+    bg_min_share: float = Field(gt=0, le=1)
 
     @field_validator("recognition_model")
     @classmethod

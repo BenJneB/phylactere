@@ -204,7 +204,7 @@ Ollama utilise le GPU de son côté, indépendamment de l'OCR : `ollama ps` affi
 ## Limites connues
 
 - Les onomatopées stylisées et le texte vertical sont souvent mal lus par l'OCR : ignorés ou mal traduits.
-- La bulle traduite est un rectangle blanc : elle recouvre le dessin quand le texte d'origine est hors bulle (narration sur fond coloré, bruitages).
+- La bulle traduite est un rectangle de couleur unie, prise sur l'image autour du texte d'origine (narration sur fond coloré). Sur un fond dessiné ou en dégradé, elle reste blanche et recouvre le dessin (bruitages). Les traductions mises en cache avant cette version restent blanches jusqu'à « Vider le cache ».
 - Deux bulles proches peuvent être fusionnées, ou une bulle coupée en deux.
 - Un modèle local de cette taille ne vaut pas un traducteur humain : au banc d'essai, le meilleur obtient 64 points sur 114 (2 par bulle juste, 1 par bulle approximative). Contresens et tournures maladroites restent fréquents.
 - Seul comic.naver.com est pris en charge, sur ordinateur.

@@ -27,6 +27,8 @@ OCR = OcrConfig(
     dedup_overlap=0.5,
     edge_margin=8,
     neighbor_margin=400,
+    bg_margin=6,
+    bg_min_share=0.6,
 )
 
 

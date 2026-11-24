@@ -43,9 +43,15 @@ class TranslateResponse(TranslationResult):
     timings_ms: dict[str, int]
 
 
+# Version du format des résultats OCR mis en cache : à incrémenter quand Bubble change
+# (2 : couleurs bg/fg du jalon 9), pour invalider les résultats déjà en cache.
+OCR_FORMAT_VERSION = 2
+
+
 def ocr_fingerprint(settings: Settings) -> str:
     """Empreinte des réglages qui changent le résultat de l'OCR (pas l'appareil)."""
     relevant = {
+        "format": OCR_FORMAT_VERSION,
         "ocr": settings.ocr.model_dump(exclude={"device"}),
         "grouping": settings.grouping.model_dump(),
     }
@@ -213,7 +219,12 @@ class Pipeline:
         result = TranslationResult(
             blocks=[
                 TranslatedBlock(
-                    box=bubble.box, original=bubble.text, translated=text, edges=bubble.edges
+                    box=bubble.box,
+                    original=bubble.text,
+                    translated=text,
+                    edges=bubble.edges,
+                    bg=bubble.bg,
+                    fg=bubble.fg,
                 )
                 for bubble, text in zip(ocr.bubbles, translations, strict=True)
             ],
