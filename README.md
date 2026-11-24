@@ -74,11 +74,12 @@ Ouvrir ensuite le popup de l'extension (icône dans la barre d'outils ; l'éping
 
 ## Utilisation
 
-Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la progression (`Traduit · 12/81`).
+Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la progression (`Traduit · 12/81 · en cours`).
 
 - **Alt+T** ou clic sur le badge : afficher / masquer toutes les traductions ;
 - clic sur une bulle : la masquer pour voir l'original (re-clic pour la remettre) ; survoler une bulle affiche le texte coréen reconnu ;
 - popup : langue cible, modèle de traduction, activation de l'extension. Changer la langue ou le modèle retraduit la page (l'OCR, déjà en cache, n'est pas refait) ;
+- popup › **Quand traduire** : « Tout l'épisode dès l'ouverture » (défaut : images à l'écran d'abord, puis le reste en arrière-plan) ou « Au fil de la lecture » (seulement les images à l'écran et les quelques suivantes, 4 par défaut, de 1 à 20). Le second mode évite de traduire tout un épisode qu'on ne fait que survoler ; le badge affiche alors `en attente du défilement` quand la suite sera traduite à l'approche. Le changement s'applique tout de suite, sans recharger la page ;
 - popup › **Vider le cache de cette série** (sur une page Naver) ou **Vider tout le cache** : les traductions seront refaites à la prochaine lecture (recharger la page). Les glossaires sont conservés.
 
 ## Démarrage automatique (optionnel)

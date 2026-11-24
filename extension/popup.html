@@ -27,11 +27,12 @@
   .dot { flex: none; width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
   label { display: block; margin: 12px 0 4px; font-weight: 600; }
-  input[type=text], input[type=password], select {
+  input[type=text], input[type=password], input[type=number], select {
     width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--line);
     border-radius: 6px; background: var(--field); color: var(--ink); font: inherit; }
   .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
   .row label { margin: 0; }
+  #lookahead { width: 64px; flex: none; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .actions { display: flex; gap: 8px; margin-top: 16px; }
   button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--accent); font: inherit;
@@ -85,6 +86,17 @@
   <select id="model">
     <option value="">Défaut du serveur</option>
   </select>
+
+  <label for="translateMode">Quand traduire</label>
+  <select id="translateMode">
+    <option value="episode">Tout l’épisode dès l’ouverture</option>
+    <option value="scroll">Au fil de la lecture</option>
+  </select>
+  <div class="row" id="lookaheadRow">
+    <input type="number" id="lookahead" min="1" max="20" step="1">
+    <label for="lookahead">images d’avance</label>
+  </div>
+  <div class="hint" id="modeHint"></div>
 
   <div class="actions">
     <button id="save" class="primary">Enregistrer</button>

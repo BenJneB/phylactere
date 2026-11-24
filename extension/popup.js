@@ -27,6 +27,9 @@ async function init() {
   $("serverUrl").value = s.serverUrl;
   $("token").value = s.token;
   $("targetLang").value = s.targetLang;
+  $("translateMode").value = s.translateMode;
+  $("lookahead").value = clampLookahead(s.lookahead);
+  showMode();
   savedModel = s.model;
   setModels([], "");
   await updateSeries();
@@ -106,6 +109,28 @@ function setModels(names, serverDefault) {
 $("enabled").addEventListener("change", async () => {
   await chrome.storage.local.set({ enabled: $("enabled").checked });
   status($("enabled").checked ? "Traduction activée." : "Traduction désactivée.");
+});
+
+// Mode de traduction : enregistré tout de suite et appliqué sans retraduire la page.
+function showMode() {
+  const scroll = $("translateMode").value === "scroll";
+  $("lookaheadRow").hidden = !scroll;
+  $("modeHint").textContent = scroll
+    ? "Seules les images à l’écran et les suivantes sont traduites : moins de calcul si vous ne lisez pas tout l’épisode."
+    : "Les images à l’écran d’abord, puis le reste de l’épisode en arrière-plan.";
+}
+
+$("translateMode").addEventListener("change", async () => {
+  showMode();
+  await chrome.storage.local.set({ translateMode: $("translateMode").value });
+  status("Mode de traduction enregistré.");
+});
+
+$("lookahead").addEventListener("change", async () => {
+  const lookahead = clampLookahead($("lookahead").value);
+  $("lookahead").value = lookahead;
+  await chrome.storage.local.set({ lookahead });
+  status(`${lookahead} image(s) d’avance.`);
 });
 
 $("save").addEventListener("click", async () => {
