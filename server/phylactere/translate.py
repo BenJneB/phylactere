@@ -42,23 +42,11 @@ LANGUAGE_NAMES = {
     "id": "indonésien",
 }
 
-# Exemples d'onomatopées (variante ``examples``). Choisis absents de l'épisode de test du
-# jalon 4 (729047/66) pour ne pas fausser la comparaison des modèles.
-SFX_EXAMPLES = [
-    ("쿵", "Boum"),
-    ("휙", "Fiou"),
-    ("두근두근", "Boum boum"),
-    ("헉", "Hein ?!"),
-    ("흑흑", "Snif snif"),
-    ("쾅", "Bang"),
-    ("휴", "Pfiou"),
-    ("킥킥", "Hi hi"),
-]
-
-
-def prompt_id(cfg: TranslationConfig) -> str:
-    """Identifiant du prompt pour la clé de cache : version et variantes utilisées."""
-    return f"{PROMPT_VERSION}-{cfg.context_mode}-{int(cfg.examples)}"
+# Identifiant du prompt dans la clé de cache des traductions. Le suffixe vient des variantes
+# de prompt du jalon 4 (contexte « pairs », sans exemples), retirées depuis : il est gardé
+# pour ne pas invalider le cache, et pourra disparaître au prochain changement de
+# PROMPT_VERSION.
+PROMPT_ID = f"{PROMPT_VERSION}-pairs-0"
 
 
 RESPONSE_SCHEMA = {
@@ -103,9 +91,9 @@ def language_name(code: str) -> str:
     return LANGUAGE_NAMES.get(code, code)
 
 
-def system_prompt(target_lang: str, examples: bool = False) -> str:
+def system_prompt(target_lang: str) -> str:
     language = language_name(target_lang)
-    prompt = f"""Tu es un traducteur professionnel de webtoons coréens. Tu traduis chaque bulle \
+    return f"""Tu es un traducteur professionnel de webtoons coréens. Tu traduis chaque bulle \
 du coréen en {language} (code {target_lang}). Écris uniquement en {language}, jamais en \
 anglais ni dans une autre langue (sauf si la cible est l'anglais).
 
@@ -127,11 +115,6 @@ n'en oublie aucune.
 Réponds uniquement avec ce JSON, une entrée par bulle, en recopiant d'abord le texte \
 coréen de la bulle puis sa traduction :
 {{"translations": [{{"id": <id>, "original": "<coréen recopié>", "text": "<traduction>"}}]}}"""
-    # Les exemples sont en français : inutiles (voire trompeurs) pour une autre langue.
-    if examples and target_lang == "fr":
-        pairs = ", ".join(f"{ko} → {fr}" for ko, fr in SFX_EXAMPLES)
-        prompt += f"\n\nExemples d'onomatopées : {pairs}."
-    return prompt
 
 
 def user_prompt(
@@ -139,20 +122,13 @@ def user_prompt(
     target_lang: str,
     context: list[tuple[str, str]],
     glossary: list[GlossaryEntry],
-    context_mode: str = "pairs",
 ) -> str:
     language = language_name(target_lang)
     parts = []
     if glossary:
         lines = [f"- {e.ko} → {e.fr}" + (f" ({e.note})" if e.note else "") for e in glossary]
         parts.append(f"Glossaire de la série (coréen → {language}) :\n" + "\n".join(lines))
-    if context and context_mode == "original":
-        lines = [f"- {original}" for original, _ in context]
-        parts.append(
-            "Bulles précédentes de l'épisode, en coréen (contexte pour comprendre la scène, "
-            "ne pas les traduire) :\n" + "\n".join(lines)
-        )
-    elif context:
+    if context:
         lines = [f"- {original} → {translated}" for original, translated in context]
         parts.append(
             "Bulles précédentes de l'épisode, déjà traduites (contexte, ne pas les "
@@ -293,8 +269,8 @@ class OllamaTranslator:
     ) -> dict[int, str]:
         """Une requête ; renvoie les traductions reçues pour les ids demandés."""
         content = await self.chat(
-            system_prompt(target_lang, self._cfg.examples),
-            user_prompt(items, target_lang, context, glossary, self._cfg.context_mode),
+            system_prompt(target_lang),
+            user_prompt(items, target_lang, context, glossary),
             model,
         )
         try:

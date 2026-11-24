@@ -12,6 +12,7 @@ un verrou (une seule connexion).
 """
 
 import asyncio
+import functools
 import hashlib
 import json
 import sqlite3
@@ -59,20 +60,20 @@ class GlossaryEntry(BaseModel):
     note: str = ""
 
 
-def _compact(text: str) -> str:
+def compact(text: str) -> str:
     """Texte sans espaces : l'OCR en perd ou en ajoute (lignes jointes par une espace)."""
     return "".join(text.split())
 
 
 def changed_terms(old: list[GlossaryEntry], new: list[GlossaryEntry]) -> set[str]:
     """Termes coréens dont l'entrée a été ajoutée, retirée ou modifiée (traduction, note)."""
-    before = {_compact(e.ko): (e.fr.strip(), e.note.strip()) for e in old}
-    after = {_compact(e.ko): (e.fr.strip(), e.note.strip()) for e in new}
+    before = {compact(e.ko): (e.fr.strip(), e.note.strip()) for e in old}
+    after = {compact(e.ko): (e.fr.strip(), e.note.strip()) for e in new}
     return {ko for ko in before.keys() | after.keys() if ko and before.get(ko) != after.get(ko)}
 
 
 def mentions(original: str, terms: set[str]) -> bool:
-    text = _compact(original)
+    text = compact(original)
     return any(term in text for term in terms)
 
 
@@ -95,6 +96,20 @@ class TranslationResult(BaseModel):
     image_size: ImageSize
 
 
+def _threaded(func):
+    """Méthode synchrone → coroutine exécutée dans un thread, sous le verrou du cache."""
+
+    @functools.wraps(func)
+    async def wrapper(self: "Cache", *args, **kwargs):
+        def call():
+            with self._lock:
+                return func(self, *args, **kwargs)
+
+        return await asyncio.to_thread(call)
+
+    return wrapper
+
+
 class Cache:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,44 +122,43 @@ class Cache:
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
             self._db.commit()
+        # Version du glossaire de chaque série, incrémentée à chaque enregistrement : une
+        # traduction commencée avec l'ancien glossaire n'est pas mise en cache (voir
+        # put_translation).
+        self._glossary_versions: dict[str, int] = {}
 
     def close(self) -> None:
         with self._lock:
             self._db.close()
 
-    async def _run(self, func, *args):
-        return await asyncio.to_thread(self._locked, func, *args)
-
-    def _locked(self, func, *args):
-        with self._lock:
-            return func(*args)
-
     # --- OCR ---
 
-    def _get_ocr(self, key: str) -> OcrResult | None:
+    @_threaded
+    def get_ocr(self, key: str) -> OcrResult | None:
         row = self._db.execute("SELECT result FROM ocr WHERE key = ?", (key,)).fetchone()
         return OcrResult.model_validate_json(row[0]) if row else None
 
-    def _put_ocr(self, key: str, series_id: str, result: OcrResult) -> None:
+    @_threaded
+    def put_ocr(self, key: str, series_id: str, result: OcrResult) -> None:
         self._db.execute(
             "INSERT OR REPLACE INTO ocr VALUES (?, ?, ?, ?)",
             (key, series_id, result.model_dump_json(), time.time()),
         )
         self._db.commit()
 
-    async def get_ocr(self, key: str) -> OcrResult | None:
-        return await self._run(self._get_ocr, key)
-
-    async def put_ocr(self, key: str, series_id: str, result: OcrResult) -> None:
-        await self._run(self._put_ocr, key, series_id, result)
-
     # --- Traductions ---
 
-    def _get_translation(self, key: str) -> TranslationResult | None:
+    @_threaded
+    def get_translation(self, key: str) -> TranslationResult | None:
         row = self._db.execute("SELECT result FROM translation WHERE key = ?", (key,)).fetchone()
         return TranslationResult.model_validate_json(row[0]) if row else None
 
-    def _put_translation(
+    def glossary_version(self, series_id: str) -> int:
+        """À lire avant le glossaire, puis à passer à put_translation."""
+        return self._glossary_versions.get(series_id, 0)
+
+    @_threaded
+    def put_translation(
         self,
         key: str,
         series_id: str,
@@ -153,7 +167,13 @@ class Cache:
         target_lang: str,
         model: str,
         result: TranslationResult,
+        glossary_version: int | None = None,
     ) -> None:
+        """``glossary_version`` : version du glossaire lue avant la traduction. S'il a été
+        enregistré depuis, la traduction n'est pas mise en cache : put_glossary a déjà
+        effacé les traductions concernées, elle les remettrait avec l'ancien glossaire."""
+        if glossary_version is not None and glossary_version != self.glossary_version(series_id):
+            return
         self._db.execute(
             "INSERT OR REPLACE INTO translation VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -169,57 +189,8 @@ class Cache:
         )
         self._db.commit()
 
-    def _context(
-        self,
-        series_id: str,
-        episode_id: str,
-        image_index: int,
-        target_lang: str,
-        model: str,
-        limit: int,
-    ) -> list[tuple[str, str]]:
-        if limit <= 0:
-            return []
-        rows = self._db.execute(
-            "SELECT result FROM translation"
-            " WHERE series_id = ? AND episode_id = ? AND target_lang = ? AND model = ?"
-            " AND image_index < ? ORDER BY image_index DESC",
-            (series_id, episode_id, target_lang, model, image_index),
-        )
-        pairs: list[tuple[str, str]] = []
-        for (raw,) in rows:
-            blocks = TranslationResult.model_validate_json(raw).blocks
-            for block in reversed(blocks):
-                pairs.append((block.original, block.translated))
-                if len(pairs) == limit:
-                    return pairs[::-1]
-        return pairs[::-1]
-
-    async def get_translation(self, key: str) -> TranslationResult | None:
-        return await self._run(self._get_translation, key)
-
-    async def put_translation(
-        self,
-        key: str,
-        series_id: str,
-        episode_id: str,
-        image_index: int,
-        target_lang: str,
-        model: str,
-        result: TranslationResult,
-    ) -> None:
-        await self._run(
-            self._put_translation,
-            key,
-            series_id,
-            episode_id,
-            image_index,
-            target_lang,
-            model,
-            result,
-        )
-
-    async def context(
+    @_threaded
+    def context(
         self,
         series_id: str,
         episode_id: str,
@@ -229,13 +200,34 @@ class Cache:
         limit: int,
     ) -> list[tuple[str, str]]:
         """Dernières bulles traduites des images précédentes de l'épisode, dans l'ordre."""
-        return await self._run(
-            self._context, series_id, episode_id, image_index, target_lang, model, limit
+        if limit <= 0:
+            return []
+        rows = self._db.execute(
+            "SELECT image_index, result FROM translation"
+            " WHERE series_id = ? AND episode_id = ? AND target_lang = ? AND model = ?"
+            " AND image_index < ? ORDER BY image_index DESC, created DESC, rowid DESC",
+            (series_id, episode_id, target_lang, model, image_index),
         )
+        pairs: list[tuple[str, str]] = []
+        seen: set[int] = set()
+        for index, raw in rows:
+            # Une image traduite avec plusieurs versions du prompt : la plus récente seule.
+            if index in seen:
+                continue
+            seen.add(index)
+            blocks = TranslationResult.model_validate_json(raw).blocks
+            for block in reversed(blocks):
+                pairs.append((block.original, block.translated))
+                if len(pairs) == limit:
+                    return pairs[::-1]
+        return pairs[::-1]
 
-    def _series_bubbles(
+    @_threaded
+    def series_bubbles(
         self, series_id: str, target_lang: str, episode_id: str | None, limit: int
     ) -> list[tuple[str, str]]:
+        """Bulles traduites en cache de la série (original, traduction), sans doublon : celles
+        de ``episode_id`` d'abord, puis des épisodes les plus récemment traduits."""
         rows = self._db.execute(
             "SELECT episode_id, image_index, created, result FROM translation"
             " WHERE series_id = ? AND target_lang = ?",
@@ -260,13 +252,6 @@ class Cache:
                     return pairs
         return pairs
 
-    async def series_bubbles(
-        self, series_id: str, target_lang: str, episode_id: str | None, limit: int
-    ) -> list[tuple[str, str]]:
-        """Bulles traduites en cache de la série (original, traduction), sans doublon : celles
-        de ``episode_id`` d'abord, puis des épisodes les plus récemment traduits."""
-        return await self._run(self._series_bubbles, series_id, target_lang, episode_id, limit)
-
     # --- Glossaires ---
 
     def _get_glossary(self, series_id: str) -> list[GlossaryEntry]:
@@ -275,10 +260,16 @@ class Cache:
         ).fetchone()
         return [GlossaryEntry.model_validate(e) for e in json.loads(row[0])] if row else []
 
-    def _put_glossary(self, series_id: str, entries: list[GlossaryEntry]) -> int:
+    get_glossary = _threaded(_get_glossary)
+
+    @_threaded
+    def put_glossary(self, series_id: str, entries: list[GlossaryEntry]) -> int:
+        """Remplace le glossaire ; efface les traductions en cache des images de la série
+        qui mentionnent un terme ajouté, retiré ou modifié. Renvoie leur nombre."""
         changed = changed_terms(self._get_glossary(series_id), entries)
         data = json.dumps([e.model_dump() for e in entries], ensure_ascii=False)
         self._db.execute("INSERT OR REPLACE INTO glossary VALUES (?, ?)", (series_id, data))
+        self._glossary_versions[series_id] = self.glossary_version(series_id) + 1
         # Seules les images dont une bulle contient un terme ajouté, retiré ou modifié sont
         # à retraduire ; les autres restent en cache.
         stale = []
@@ -294,17 +285,11 @@ class Cache:
         self._db.commit()
         return len(stale)
 
-    async def get_glossary(self, series_id: str) -> list[GlossaryEntry]:
-        return await self._run(self._get_glossary, series_id)
-
-    async def put_glossary(self, series_id: str, entries: list[GlossaryEntry]) -> int:
-        """Remplace le glossaire ; efface les traductions en cache des images de la série
-        qui mentionnent un terme ajouté, retiré ou modifié. Renvoie leur nombre."""
-        return await self._run(self._put_glossary, series_id, entries)
-
     # --- Vidage ---
 
-    def _clear(self, series_id: str | None) -> int:
+    @_threaded
+    def clear(self, series_id: str | None = None) -> int:
+        """Vide le cache (OCR et traductions ; les glossaires sont conservés)."""
         if series_id is None:
             removed = self._db.execute("DELETE FROM translation").rowcount
             removed += self._db.execute("DELETE FROM ocr").rowcount
@@ -317,7 +302,3 @@ class Cache:
             ).rowcount
         self._db.commit()
         return removed
-
-    async def clear(self, series_id: str | None = None) -> int:
-        """Vide le cache (OCR et traductions ; les glossaires sont conservés)."""
-        return await self._run(self._clear, series_id)

@@ -24,8 +24,8 @@ from phylactere.reports import (
     find_bubble,
     write_report,
 )
-from phylactere.schemas import OcrResult
-from phylactere.translate import PROMPT_VERSION, OllamaTranslator, prompt_id
+from phylactere.schemas import ImageRequest, OcrResult
+from phylactere.translate import PROMPT_ID, PROMPT_VERSION, OllamaTranslator
 
 logger = logging.getLogger("phylactere.pipeline")
 
@@ -33,18 +33,8 @@ logger = logging.getLogger("phylactere.pipeline")
 IMAGE_MEMORY = 64
 
 
-class TranslateRequest(BaseModel):
-    image_url: str
-    target_lang: str | None = Field(default=None, min_length=2, max_length=10)
-    series_id: str = Field(min_length=1, max_length=64)
-    episode_id: str = Field(min_length=1, max_length=64)
-    index: int = Field(ge=0)
+class TranslateRequest(ImageRequest):
     priority: ImagePriority = "visible"
-    # Modèle Ollama choisi dans l'extension (défaut : celui de la configuration).
-    model: str | None = Field(default=None, min_length=1, max_length=100)
-    # Images voisines dans l'épisode : permettent de lire les bulles coupées entre deux images.
-    prev_image_url: str | None = None
-    next_image_url: str | None = None
 
 
 class TranslateResponse(TranslationResult):
@@ -167,9 +157,25 @@ class Pipeline:
         images = await asyncio.to_thread(decode_images, data, previous, following)
         return await self._ocr.recognize(*images)
 
+    def _lang_model(self, target_lang: str | None, model: str | None) -> tuple[str, str]:
+        """Langue et modèle demandés par l'extension, sinon ceux de la configuration."""
+        return (
+            target_lang or self._settings.translation.target_lang,
+            model or self._settings.ollama.model,
+        )
+
+    def _check(self, request: ImageRequest) -> tuple[str, str]:
+        """Contrôle les URL de l'image et de ses voisines ; renvoie la langue et le modèle."""
+        for url in (request.image_url, request.prev_image_url, request.next_image_url):
+            if url is not None:
+                check_url(url, self._settings.fetch)
+        return self._lang_model(request.target_lang, request.model)
+
     # --- OCR ---
 
-    async def _ocr_result(self, request: TranslateRequest, timings: dict[str, int]) -> OcrResult:
+    async def _ocr_result(
+        self, request: ImageRequest, priority: ImagePriority, timings: dict[str, int]
+    ) -> OcrResult:
         """Résultat OCR de l'image (cache, sinon téléchargement et file OCR)."""
         key = sha1(
             json.dumps(
@@ -196,7 +202,7 @@ class Pipeline:
         # Décodage dans la tâche de la file : une demande fusionnée avec une autre ne
         # décode rien, et la tâche en attente ne garde que les octets.
         start = time.perf_counter()
-        result = await self.ocr_queue.run(key, request.priority, lambda: self.recognize(*data))
+        result = await self.ocr_queue.run(key, priority, lambda: self.recognize(*data))
         timings["ocr"] = _ms(start)
         await self._cache.put_ocr(key, request.series_id, result)
         return result
@@ -204,24 +210,20 @@ class Pipeline:
     # --- Traduction ---
 
     async def translate(self, request: TranslateRequest) -> TranslateResponse:
-        for url in (request.image_url, request.prev_image_url, request.next_image_url):
-            if url is not None:
-                check_url(url, self._settings.fetch)
-
-        lang = request.target_lang or self._settings.translation.target_lang
-        model = request.model or self._settings.ollama.model
-        key = f"{sha1(request.image_url)}:{lang}:{model}:{prompt_id(self._settings.translation)}"
+        lang, model = self._check(request)
+        key = f"{sha1(request.image_url)}:{lang}:{model}:{PROMPT_ID}"
         timings = {"fetch": 0, "ocr": 0, "translate": 0}
 
         cached = await self._cache.get_translation(key)
         if cached is not None:
             return TranslateResponse(**dict(cached), cached=True, timings_ms=timings)
 
-        ocr = await self._ocr_result(request, timings)
+        ocr = await self._ocr_result(request, request.priority, timings)
         texts = [bubble.text for bubble in ocr.bubbles]
 
         start = time.perf_counter()
         translations: list[str] = []
+        glossary_version = self._cache.glossary_version(request.series_id)
         if texts:
             context = await self._cache.context(
                 request.series_id,
@@ -242,19 +244,23 @@ class Pipeline:
         result = TranslationResult(
             blocks=[
                 TranslatedBlock(
-                    box=bubble.box,
+                    **bubble.model_dump(exclude={"text", "lines"}),
                     original=bubble.text,
                     translated=text,
-                    edges=bubble.edges,
-                    bg=bubble.bg,
-                    fg=bubble.fg,
                 )
                 for bubble, text in zip(ocr.bubbles, translations, strict=True)
             ],
             image_size=ocr.image_size,
         )
         await self._cache.put_translation(
-            key, request.series_id, request.episode_id, request.index, lang, model, result
+            key,
+            request.series_id,
+            request.episode_id,
+            request.index,
+            lang,
+            model,
+            result,
+            glossary_version,
         )
         logger.info(
             "Image %s/%s #%d : %d bulle(s), %s",
@@ -274,8 +280,7 @@ class Pipeline:
         Passe par la file de traduction en priorité « background » : après les images, et
         jamais deux modèles chargés à la fois dans Ollama.
         """
-        lang = request.target_lang or self._settings.translation.target_lang
-        model = request.model or self._settings.ollama.model
+        lang, model = self._lang_model(request.target_lang, request.model)
         cfg = self._settings.glossary
         bubbles = await self._cache.series_bubbles(
             series_id, lang, request.episode_id, cfg.suggest_bubbles
@@ -309,26 +314,11 @@ class Pipeline:
     async def report(self, request: ReportRequest) -> ReportResponse:
         """Enregistre le signalement d'une bulle : JSON (lignes OCR, traduction, modèle)
         et découpe PNG, dans le dossier des signalements."""
-        for url in (request.image_url, request.prev_image_url, request.next_image_url):
-            if url is not None:
-                check_url(url, self._settings.fetch)
-        lang = request.target_lang or self._settings.translation.target_lang
-        model = request.model or self._settings.ollama.model
+        lang, model = self._check(request)
 
         # Mêmes voisines que /translate : le résultat OCR vient du cache (sinon il est
         # recalculé, en priorité « visible » puisque l'utilisateur attend).
-        ocr = await self._ocr_result(
-            TranslateRequest(
-                image_url=request.image_url,
-                series_id=request.series_id,
-                episode_id=request.episode_id,
-                index=request.index,
-                priority="visible",
-                prev_image_url=request.prev_image_url,
-                next_image_url=request.next_image_url,
-            ),
-            {},
-        )
+        ocr = await self._ocr_result(request, "visible", {})
         bubble = find_bubble(ocr, request.box)
         data, following = await asyncio.gather(
             self.download(request.image_url), self.download_neighbor(request.next_image_url)
@@ -343,7 +333,7 @@ class Pipeline:
                 model,
                 {
                     "prompt_version": PROMPT_VERSION,
-                    "prompt_id": prompt_id(self._settings.translation),
+                    "prompt_id": PROMPT_ID,
                 },
                 bubble,
                 crop_bubble(image, below, request.box),

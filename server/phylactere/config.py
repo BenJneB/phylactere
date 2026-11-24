@@ -52,8 +52,6 @@ class TranslationConfig(_Section):
     target_lang: str
     context_size: int = Field(ge=0)
     temperature: float = Field(ge=0, le=2)
-    context_mode: Literal["pairs", "original"]
-    examples: bool
 
 
 class GlossaryConfig(_Section):
@@ -120,18 +118,19 @@ class Settings(_Section):
     fetch: FetchConfig
 
 
+def _env_dir(env: str, default: str) -> Path:
+    """Dossier désigné par la variable d'environnement ``env``, sinon ``default``."""
+    return Path(os.environ.get(env) or default)
+
+
 def cache_dir() -> Path:
     """Dossier de cache (modèles OCR, cache SQLite)."""
-    if custom := os.environ.get(ENV_CACHE_DIR):
-        return Path(custom)
-    return Path(platformdirs.user_cache_dir(APP_NAME, appauthor=False))
+    return _env_dir(ENV_CACHE_DIR, platformdirs.user_cache_dir(APP_NAME, appauthor=False))
 
 
 def log_dir() -> Path:
     """Dossier des journaux (Windows : %LOCALAPPDATA%\\phylactere\\Logs)."""
-    if custom := os.environ.get(ENV_LOG_DIR):
-        return Path(custom)
-    return Path(platformdirs.user_log_dir(APP_NAME, appauthor=False))
+    return _env_dir(ENV_LOG_DIR, platformdirs.user_log_dir(APP_NAME, appauthor=False))
 
 
 def data_dir() -> Path:
@@ -139,9 +138,9 @@ def data_dir() -> Path:
 
     Windows : %LOCALAPPDATA%\\phylactere ; Linux : ~/.local/share/phylactere.
     """
-    if custom := os.environ.get(ENV_DATA_DIR):
-        return Path(custom)
-    return Path(platformdirs.user_data_dir(APP_NAME, appauthor=False, roaming=False))
+    return _env_dir(
+        ENV_DATA_DIR, platformdirs.user_data_dir(APP_NAME, appauthor=False, roaming=False)
+    )
 
 
 def reports_dir() -> Path:
@@ -150,10 +149,10 @@ def reports_dir() -> Path:
 
 
 def config_dir() -> Path:
-    if custom := os.environ.get(ENV_CONFIG_DIR):
-        return Path(custom)
     # roaming=False : %LOCALAPPDATA% sous Windows ; appauthor=False : pas de sous-dossier éditeur.
-    return Path(platformdirs.user_config_dir(APP_NAME, appauthor=False, roaming=False))
+    return _env_dir(
+        ENV_CONFIG_DIR, platformdirs.user_config_dir(APP_NAME, appauthor=False, roaming=False)
+    )
 
 
 def user_config_path() -> Path:

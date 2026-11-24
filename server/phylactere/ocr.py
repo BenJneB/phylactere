@@ -102,6 +102,17 @@ def run_pipeline(
     return OcrResult(image_size=ImageSize(w=width, h=height), bubbles=bubbles)
 
 
+def stack_images(*parts: Image.Image | None) -> Image.Image:
+    """Empile verticalement des images de même largeur (les None sont ignorées), en RGB."""
+    images = [part for part in parts if part is not None]
+    stacked = Image.new("RGB", (images[0].width, sum(image.height for image in images)))
+    top = 0
+    for image in images:
+        stacked.paste(image, (0, top))
+        top += image.height
+    return stacked
+
+
 def _shift_bubble(bubble: Bubble, dy: int) -> Bubble:
     return bubble.model_copy(
         update={
@@ -147,14 +158,7 @@ def run_pipeline_with_neighbors(
         return run_pipeline(image, detector, ocr_cfg, grouping_cfg)
 
     offset = above.height if above else 0
-    extended = Image.new("RGB", (width, offset + height + (below.height if below else 0)))
-    if above:
-        extended.paste(above, (0, 0))
-    extended.paste(image.convert("RGB"), (0, offset))
-    if below:
-        extended.paste(below, (0, offset + height))
-
-    result = run_pipeline(extended, detector, ocr_cfg, grouping_cfg)
+    result = run_pipeline(stack_images(above, image, below), detector, ocr_cfg, grouping_cfg)
     bubbles = [
         _shift_bubble(bubble, -offset)
         for bubble in result.bubbles

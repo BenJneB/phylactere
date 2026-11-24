@@ -226,43 +226,15 @@ def test_preload_with_ollama_down_is_not_fatal():
     assert preload(down) is False
 
 
-def test_examples_variant_adds_sfx_examples_in_french_only():
-    assert "Exemples d'onomatopées" not in system_prompt("fr")
-    assert "쿵 → Boum" in system_prompt("fr", examples=True)
-    assert "Exemples d'onomatopées" not in system_prompt("en", examples=True)
-
-
-def test_original_context_mode_hides_previous_translations():
+def test_context_shows_previous_translations():
     context = [("꼬랑지!!", "Qu'est-ce qui ?!")]
-    pairs = user_prompt({1: "가"}, "fr", context, [], "pairs")
-    original = user_prompt({1: "가"}, "fr", context, [], "original")
-
-    assert "꼬랑지!! → Qu'est-ce qui ?!" in pairs
-    assert "- 꼬랑지!!" in original and "Qu'est-ce qui" not in original
+    assert "- 꼬랑지!! → Qu'est-ce qui ?!" in user_prompt({1: "가"}, "fr", context, [])
 
 
-def test_variants_reach_the_request():
-    fake = FakeOllama({1: "Salut"})
-    cfg = SETTINGS.translation.model_copy(update={"examples": True, "context_mode": "original"})
+def test_prompt_id_keeps_cache_keys_of_previous_versions():
+    from phylactere.translate import PROMPT_ID, PROMPT_VERSION
 
-    async def go():
-        async with httpx.AsyncClient(base_url="http://o", transport=httpx.MockTransport(fake)) as c:
-            await OllamaTranslator(c, SETTINGS.ollama, cfg).translate(
-                ["안녕"], "fr", context=[("가", "A")]
-            )
-
-    asyncio.run(go())
-    system, user = (m["content"] for m in fake.bodies[0]["messages"])
-    assert "Exemples d'onomatopées" in system
-    assert "- 가" in user and "→ A" not in user
-
-
-def test_prompt_id_changes_with_variants():
-    from phylactere.translate import prompt_id
-
-    base = prompt_id(SETTINGS.translation)
-    assert base != prompt_id(SETTINGS.translation.model_copy(update={"examples": True}))
-    assert base != prompt_id(SETTINGS.translation.model_copy(update={"context_mode": "original"}))
+    assert f"{PROMPT_VERSION}-pairs-0" == PROMPT_ID
 
 
 def test_stats_callback_receives_ollama_counters():

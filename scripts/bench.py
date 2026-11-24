@@ -10,7 +10,7 @@ Ollama démarré et les modèles installés (ollama pull …). Depuis server/ :
 
     uv run --no-sync python ../scripts/bench.py "https://comic.naver.com/webtoon/detail?titleId=729047&no=66"
     uv run --no-sync python ../scripts/bench.py ../samples/729047-66 --models qwen3:4b,qwen3:8b \\
-        --variants base,exemples,coreen,sans-contexte --limit 40
+        --variants base,sans-contexte --limit 40
 
 Résultats dans samples/bench/<série>-<épisode>/ (non versionné) : rapport-<date>.html et
 resultats-<date>.json.
@@ -39,20 +39,18 @@ from PIL import Image
 from translate_samples import episode_images
 
 from phylactere.__main__ import use_utf8_output
+from phylactere.cache import compact
 from phylactere.config import load_settings
 from phylactere.fetch import decode_image, fetch_bytes
 from phylactere.ocr import PaddleDetector, run_pipeline_with_neighbors
+from phylactere.reports import crop_bubble
 from phylactere.translate import OllamaTranslator, TranslationError
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODELS = "qwen3:4b,qwen3:8b,qwen3.5:4b,gemma3:4b,translategemma:4b,exaone3.5:7.8b"
-# Variantes de prompt : (context_mode, examples, contexte utilisé)
-VARIANTS = {
-    "base": ("pairs", False, True),  # comportement actuel du serveur
-    "exemples": ("pairs", True, True),
-    "coreen": ("original", True, True),
-    "sans-contexte": ("pairs", True, False),
-}
+# Variantes : contexte (bulles précédentes déjà traduites) donné au modèle ou non.
+# "base" : comportement du serveur.
+VARIANTS = {"base": True, "sans-contexte": False}
 
 
 def gpu_name() -> str:
@@ -142,10 +140,8 @@ async def run_model(client, settings, model, variants, ocr_results, lang) -> lis
     print(f"  {model} : chargé en {load_s} s, {gpu_text}", flush=True)
 
     for variant in variants:
-        context_mode, examples, use_context = VARIANTS[variant]
-        cfg = settings.translation.model_copy(
-            update={"context_mode": context_mode, "examples": examples}
-        )
+        use_context = VARIANTS[variant]
+        cfg = settings.translation
         calls: list[dict] = []  # statistiques Ollama de chaque requête de l'image en cours
         translator = OllamaTranslator(client, ollama_cfg, cfg, on_stats=calls.append)
         context: list[tuple[str, str]] = []
@@ -236,29 +232,15 @@ def load_reference(path: Path | None) -> dict:
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
     return {
-        (b["index"], b["original"].replace(" ", "")): (b["reference"], b.get("note", ""))
+        (b["index"], compact(b["original"])): (b["reference"], b.get("note", ""))
         for b in data["bubbles"]
     }
 
 
 def crop_data_uri(images: list[Image.Image], index: int, box) -> str:
     """Vignette de la case autour de la bulle (qui peut déborder sur l'image suivante)."""
-    image = images[index]
-    if index + 1 < len(images) and images[index + 1].width == image.width:
-        following = images[index + 1]
-        joined = Image.new("RGB", (image.width, image.height + following.height))
-        joined.paste(image, (0, 0))
-        joined.paste(following, (0, image.height))
-        image = joined
-    margin = 90
-    crop = image.crop(
-        (
-            max(0, box.x - margin),
-            max(0, box.y - margin),
-            min(image.width, box.x + box.w + margin),
-            min(image.height, box.y + box.h + margin),
-        )
-    )
+    following = images[index + 1] if index + 1 < len(images) else None
+    crop = crop_bubble(images[index], following, box, margin=90)
     crop.thumbnail((360, 360))
     out = BytesIO()
     crop.convert("RGB").save(out, format="JPEG", quality=80)
@@ -298,7 +280,7 @@ def render_report(meta: dict, images, ocr_results, runs, reference) -> str:
                 candidates.setdefault(text, []).append(run_index)
             order = list(candidates.items())
             random.Random(bubble_id).shuffle(order)  # ordre aléatoire mais stable : à l'aveugle
-            ref = reference.get((index, bubble.text.replace(" ", "")))
+            ref = reference.get((index, compact(bubble.text)))
             ref_html = (
                 f"<p class=ref><b>Référence :</b> {esc(ref[0])}"
                 + (f"<br><small>{esc(ref[1])}</small>" if ref[1] else "")

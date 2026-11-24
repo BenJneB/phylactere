@@ -27,8 +27,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function translate(request) {
   const s = await settings();
-  const body = { ...request, target_lang: s.targetLang };
-  if (s.model) body.model = s.model;
+  const body = withLangModel(request, s);
   // Délai dépassé : le serveur est lent (CPU chargé), pas arrêté ; content.js remet l'image
   // en file, et la nouvelle demande est fusionnée avec la tâche en cours ou servie par le cache.
   return call("/translate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "timeout", s });
@@ -38,8 +37,7 @@ async function translate(request) {
 // sa découpe. Il peut devoir refaire l'OCR si le cache a été vidé : délai de /translate.
 async function report(request) {
   const s = await settings();
-  const body = { ...request, target_lang: s.targetLang };
-  if (s.model) body.model = s.model;
+  const body = withLangModel(request, s);
   return call("/report", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
 }
 

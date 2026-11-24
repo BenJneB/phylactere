@@ -78,11 +78,20 @@ def render_report(report: dict) -> str:
 
 
 def render_html(reports: list[dict]) -> str:
-    body = "\n".join(render_report(r) for r in reports) or "<p>Aucun signalement.</p>"
+    """Un signalement incomplet (JSON écrit à moitié, modifié à la main) est ignoré avec un
+    avertissement, sans empêcher le rapport."""
+    parts = []
+    for report in reports:
+        try:
+            parts.append(render_report(report))
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            name = report.get("id", "?") if isinstance(report, dict) else "?"
+            print(f"Ignoré : {name} (champ manquant ou invalide : {exc!r})", file=sys.stderr)
+    body = "\n".join(parts) or "<p>Aucun signalement.</p>"
     return f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><title>Phylactère · bulles signalées</title>
 <style>{STYLE}</style></head>
-<body><h1>Bulles signalées ({len(reports)})</h1>
+<body><h1>Bulles signalées ({len(parts)})</h1>
 {body}
 </body></html>
 """
