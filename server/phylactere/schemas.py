@@ -103,3 +103,46 @@ class ImageRequest(BaseModel):
     # Nombre d'images de l'épisode (jalon 17) : retenu par le serveur pour savoir si un
     # épisode a été lu en entier (résumé) et exporter sans relire la page de Naver.
     image_count: int | None = Field(default=None, ge=1, le=2000)
+
+
+def compact(text: str) -> str:
+    """Texte sans espaces : l'OCR en perd ou en ajoute (lignes jointes par une espace)."""
+    return "".join(text.split())
+
+
+class GlossaryEntry(BaseModel):
+    ko: str
+    fr: str
+    note: str = ""
+
+
+class TranslatedBlock(BaseModel):
+    """Une bulle traduite. ``box`` en pixels de l'image d'origine ; elle peut déborder
+    en bas sur l'image suivante quand la bulle est coupée entre deux images."""
+
+    box: Box
+    original: str
+    translated: str
+    edges: list[Edge] = []
+    # Couleurs prises sur l'image (voir Bubble). Absentes des traductions mises en cache
+    # avant le jalon 9 : None, l'extension garde le fond blanc.
+    bg: str | None = None
+    fg: str | None = None
+    # Modèle qui a produit la traduction (jalon 13 : une bulle retraduite peut venir d'un
+    # autre modèle que celui de la clé de cache) ; absent des traductions plus anciennes.
+    model: str | None = None
+    # Bulle corrigée à la main (jalon 14) : ``translated`` est la correction, ``machine``
+    # la traduction du modèle, qui revient si la correction est effacée.
+    corrected: bool = False
+    machine: str | None = None
+
+
+class TranslationResult(BaseModel):
+    blocks: list[TranslatedBlock]
+    image_size: ImageSize
+
+
+class Correction(BaseModel):
+    box: Box
+    original: str
+    text: str

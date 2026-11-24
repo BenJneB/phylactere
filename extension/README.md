@@ -5,7 +5,10 @@ Extension Manifest V3 (Chrome, Edge, Brave, Firefox 121+), en JavaScript sans bu
 ## Fichiers
 
 - `manifest.json` : déclaration de l'extension. `background` contient à la fois `service_worker` (Chrome) et `scripts` (Firefox) : chaque navigateur prend la clé qu'il connaît.
-- `content.js` / `content.css` : injectés dans les pages de comic.naver.com. Repèrent les images de l'épisode, les envoient à traduire (images visibles d'abord, puis préchargement de tout l'épisode, ou seulement des `lookahead` images suivantes en mode `scroll`) et superposent les bulles traduites.
+- `content.js` / `content.css` : injectés dans les pages de comic.naver.com. Repèrent les images de l'épisode, les envoient à traduire (images visibles d'abord, puis préchargement de tout l'épisode, ou seulement des `lookahead` images suivantes en mode `scroll`) et superposent les bulles traduites. `content.js` garde l'état (file d'attente, préchargement, résumé, badge) et s'appuie sur trois fichiers chargés avant lui (`manifest.json`), qui s'enregistrent dans `globalThis.phy` :
+  - `naver.js` : tout ce qui dépend de la structure des pages de Naver (adresse d'un épisode, conteneur et URL des images, script d'état avec les épisodes précédent et suivant) ;
+  - `render.js` : dessin des bulles (calque, couleurs, position, taille du texte) et de l'encart « Précédemment… », sans état ;
+  - `bubbles.js` : actions sur une bulle (clic, signalement, retraduction, correction) et retraduction de l'image (Maj+Alt+T).
 - `api.js` : appels au serveur local avec le jeton (`call`, réglages), chargé par `background.js` et par la page de glossaire.
 - `background.js` : parle au serveur local pour le content script et le popup (`POST /translate`, `POST` / `DELETE /report`, `/health`, `/models`, `DELETE /cache`, `/glossary`) avec le jeton. Il normalise les erreurs pour le content script : serveur arrêté, jeton refusé, service pas prêt (503), erreur propre à une image. Seule exception : la page de glossaire demande elle-même les propositions (requête qui peut dépasser 5 minutes sur CPU, trop longue pour un service worker). Après l'enregistrement d'un glossaire, il prévient les onglets Naver de la série (message `glossary-changed`), qui se retraduisent.
 - `popup.html` / `popup.js` : réglages (adresse du serveur, jeton, langue, modèle, mode de traduction), état du serveur, vidage du cache, ouverture de la page de glossaire.
@@ -28,4 +31,4 @@ Ils couvrent le placement des bulles, la priorité des images visibles, le quota
 
 ## Ajustements
 
-Les constantes en haut de `content.js` (`VIEWER`, `IMG_HOST`, `MAX_IN_FLIGHT`, `PAD`) règlent la détection des images et le rendu. Si Naver change d'hébergeur d'images, modifier aussi `allowed_hosts` dans la configuration du serveur.
+Si Naver change la structure de ses pages, seul `naver.js` est à modifier (`VIEWER`, `IMG_HOST`, lecture du script d'état). Les autres réglages : `MAX_IN_FLIGHT` en haut de `content.js` (requêtes en cours), `PAD` en haut de `render.js` (marge autour du texte). Si Naver change d'hébergeur d'images, modifier aussi `allowed_hosts` dans la configuration du serveur.

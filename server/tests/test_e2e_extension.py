@@ -45,7 +45,7 @@ IMAGE_COUNT = 12
 VIEWPORT = {"width": 900, "height": 800}  # seule la première image est visible à l'ouverture
 # Ligne de texte simulée, en pixels de l'image d'origine.
 LINE_X, LINE_Y, LINE_W, LINE_H = 100, 400, 200, 30
-PAD = 6  # même marge que content.js
+PAD = 6  # même marge que render.js
 URL_RE = re.compile(r"/webtoon/(\d+)/(\d+)/img_(\d+)\.png$")
 BUBBLE = ".phy-layer .phy-bubble"
 BADGE = ".phy-badge"

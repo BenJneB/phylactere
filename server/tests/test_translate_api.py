@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 from pypdf import PdfReader
 
 from phylactere import pipeline
-from phylactere.cache import TranslationResult
 from phylactere.config import load_settings
 from phylactere.main import TOKEN_HEADER, create_app
+from phylactere.schemas import TranslationResult
 from tests.helpers import FakeDetector, line, png_bytes
 
 BASE = "https://image-comic.pstatic.net/webtoon/1/2/"

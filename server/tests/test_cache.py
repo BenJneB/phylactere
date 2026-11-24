@@ -4,17 +4,18 @@ import sqlite3
 import pytest
 
 from phylactere import cache as cache_module
-from phylactere.cache import (
-    Cache,
+from phylactere.cache import Cache, sha1
+from phylactere.corrections import apply_corrections, read_corrections
+from phylactere.schemas import (
+    Box,
+    Bubble,
     Correction,
     GlossaryEntry,
+    ImageSize,
+    OcrResult,
     TranslatedBlock,
     TranslationResult,
-    apply_corrections,
-    read_corrections,
-    sha1,
 )
-from phylactere.schemas import Box, Bubble, ImageSize, OcrResult
 
 
 @pytest.fixture

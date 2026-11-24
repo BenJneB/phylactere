@@ -219,7 +219,7 @@ Ollama utilise le GPU de son côté, indépendamment de l'OCR : `ollama ps` affi
 
 **Bulles mal placées, ratées ou mal traduites** : voir « Limites connues ». Le glossaire corrige les noms propres ; vider le cache de la série puis recharger la page refait les traductions.
 
-**Plus rien ne se passe sur Naver** (pas de badge) : vérifier que la traduction est activée dans le popup, et que l'extension est chargée (Firefox la retire à chaque fermeture). Si Naver a changé la structure de ses pages, les réglages en haut de `extension\content.js` sont à adapter (voir `extension\README.md`).
+**Plus rien ne se passe sur Naver** (pas de badge) : vérifier que la traduction est activée dans le popup, et que l'extension est chargée (Firefox la retire à chaque fermeture). Si Naver a changé la structure de ses pages, les réglages en haut de `extension\naver.js` sont à adapter (voir `extension\README.md`).
 
 ## Désinstallation
 

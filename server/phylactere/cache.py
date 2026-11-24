@@ -26,7 +26,6 @@ un verrou (une seule connexion).
 """
 
 import asyncio
-import contextlib
 import functools
 import hashlib
 import json
@@ -34,12 +33,20 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Iterator
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from phylactere.schemas import Box, Edge, ImageSize, OcrResult
+from phylactere.corrections import apply_corrections, load_corrections, match_correction
+from phylactere.schemas import (
+    Box,
+    Correction,
+    GlossaryEntry,
+    OcrResult,
+    TranslatedBlock,
+    TranslationResult,
+    compact,
+)
 
 logger = logging.getLogger("phylactere.cache")
 
@@ -117,25 +124,10 @@ PURGE_TARGET = 0.9
 PURGE_BATCH = 50
 # Valeur de PRAGMA auto_vacuum pour le mode INCREMENTAL.
 AUTO_VACUUM_INCREMENTAL = 2
-# Une correction s'applique à une bulle de boîte égale, sinon à la bulle de même original
-# (sans espaces) qui la recouvre le plus, si le recouvrement atteint cette part de la plus
-# grande des deux boîtes : l'OCR a pu changer légèrement (réglages, voisines).
-CORRECTION_OVERLAP = 0.5
 
 
 def sha1(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
-
-
-class GlossaryEntry(BaseModel):
-    ko: str
-    fr: str
-    note: str = ""
-
-
-def compact(text: str) -> str:
-    """Texte sans espaces : l'OCR en perd ou en ajoute (lignes jointes par une espace)."""
-    return "".join(text.split())
 
 
 def changed_terms(old: list[GlossaryEntry], new: list[GlossaryEntry]) -> set[str]:
@@ -148,32 +140,6 @@ def changed_terms(old: list[GlossaryEntry], new: list[GlossaryEntry]) -> set[str
 def mentions(original: str, terms: set[str]) -> bool:
     text = compact(original)
     return any(term in text for term in terms)
-
-
-class TranslatedBlock(BaseModel):
-    """Une bulle traduite. ``box`` en pixels de l'image d'origine ; elle peut déborder
-    en bas sur l'image suivante quand la bulle est coupée entre deux images."""
-
-    box: Box
-    original: str
-    translated: str
-    edges: list[Edge] = []
-    # Couleurs prises sur l'image (voir Bubble). Absentes des traductions mises en cache
-    # avant le jalon 9 : None, l'extension garde le fond blanc.
-    bg: str | None = None
-    fg: str | None = None
-    # Modèle qui a produit la traduction (jalon 13 : une bulle retraduite peut venir d'un
-    # autre modèle que celui de la clé de cache) ; absent des traductions plus anciennes.
-    model: str | None = None
-    # Bulle corrigée à la main (jalon 14) : ``translated`` est la correction, ``machine``
-    # la traduction du modèle, qui revient si la correction est effacée.
-    corrected: bool = False
-    machine: str | None = None
-
-
-class TranslationResult(BaseModel):
-    blocks: list[TranslatedBlock]
-    image_size: ImageSize
 
 
 class StoredSummary(BaseModel):
@@ -190,57 +156,6 @@ class StoredSummary(BaseModel):
 
 # Colonnes de la table summary qui portent un StoredSummary.
 SUMMARY_FIELDS = tuple(StoredSummary.model_fields)
-
-
-class Correction(BaseModel):
-    box: Box
-    original: str
-    text: str
-
-
-def match_correction(
-    bubbles: list[tuple[Box, str]], correction: Correction, exclude: set[int] = frozenset()
-) -> int | None:
-    """Indice de la bulle ``(boîte, original)`` à laquelle s'applique la correction : boîte
-    égale, sinon même original (sans espaces) et plus grand recouvrement, s'il atteint
-    CORRECTION_OVERLAP de la plus grande des deux boîtes. Les indices ``exclude`` (bulles
-    déjà corrigées) sont ignorés."""
-    candidates = [(i, box, text) for i, (box, text) in enumerate(bubbles) if i not in exclude]
-    for i, box, _ in candidates:
-        if box == correction.box:
-            return i
-    original = compact(correction.original)
-    best, best_ratio = None, 0.0
-    for i, box, text in candidates:
-        if compact(text) != original:
-            continue
-        largest = max(box.area, correction.box.area)
-        ratio = box.intersection_area(correction.box) / largest if largest else 0.0
-        if ratio > best_ratio:
-            best, best_ratio = i, ratio
-    return best if best_ratio >= CORRECTION_OVERLAP else None
-
-
-def apply_corrections(
-    blocks: list[TranslatedBlock], corrections: list[Correction]
-) -> list[TranslatedBlock]:
-    """Remplace le texte des bulles corrigées (``corrected``, traduction du modèle gardée
-    dans ``machine``). Une correction qui ne retrouve pas sa bulle est ignorée."""
-    if not corrections:
-        return blocks
-    out = list(blocks)
-    bubbles = [(block.box, block.original) for block in blocks]
-    taken: set[int] = set()
-    for correction in corrections:
-        index = match_correction(bubbles, correction, taken)
-        if index is None:
-            continue
-        taken.add(index)
-        block = out[index]
-        out[index] = block.model_copy(
-            update={"translated": correction.text, "corrected": True, "machine": block.translated}
-        )
-    return out
 
 
 # Images d'un épisode : (index dans l'épisode, traductions des bulles dans l'ordre).
@@ -265,52 +180,6 @@ def translation_key(image_url: str, target_lang: str, model: str, prompt_id: str
 def image_hash(translation_key: str) -> str:
     """Empreinte de l'URL de l'image, en tête de la clé d'une traduction."""
     return translation_key.split(":", 1)[0]
-
-
-def load_corrections(db: sqlite3.Connection, image: str, target_lang: str) -> list[Correction]:
-    """Corrections d'une image (empreinte de l'URL) dans une langue, dans l'ordre de saisie."""
-    rows = db.execute(
-        "SELECT box, original, text FROM correction WHERE image = ? AND target_lang = ?"
-        " ORDER BY id",
-        (image, target_lang),
-    )
-    return [
-        Correction(box=Box.model_validate_json(box), original=original, text=text)
-        for box, original, text in rows
-    ]
-
-
-@contextlib.contextmanager
-def open_readonly(path: Path) -> Iterator[sqlite3.Connection | None]:
-    """Base ``path`` en lecture seule (scripts : le serveur peut tourner) ; None si elle
-    n'existe pas."""
-    if not path.is_file():
-        yield None
-        return
-    with contextlib.closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as db:
-        yield db
-
-
-def read_corrections(path: Path) -> list[dict]:
-    """Toutes les corrections de la base ``path``, de la plus récente à la plus ancienne
-    (scripts/reports.py). Base ouverte en lecture seule : le serveur peut tourner. Pas de
-    base, ou base d'avant le jalon 14 : liste vide."""
-    with open_readonly(path) as db:
-        if db is None:
-            return []
-        try:
-            cursor = db.execute(
-                "SELECT target_lang, box, original, text, created, image_url, series_id,"
-                " episode_id, image_index, model, translated FROM correction"
-                " ORDER BY created DESC"
-            )
-        except sqlite3.OperationalError:  # pas de table correction
-            return []
-        names = [column[0] for column in cursor.description]
-        rows = [dict(zip(names, row, strict=True)) for row in cursor]
-    for row in rows:
-        row["box"] = json.loads(row["box"])
-    return rows
 
 
 def prompt_rank(key: str, model: str, wanted_model: str, prompt_id: str) -> tuple[bool, bool]:

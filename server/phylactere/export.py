@@ -30,11 +30,12 @@ import httpx
 from fpdf import FPDF
 from PIL import Image
 
-from phylactere.cache import Cache, EpisodeImage, TranslatedBlock, TranslationResult
+from phylactere.cache import Cache, EpisodeImage
 from phylactere.config import FetchConfig, data_dir
 from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError, fetch_bytes
 from phylactere.naver import USER_AGENT, episode_image_urls, episode_page_url
+from phylactere.schemas import TranslatedBlock, TranslationResult
 from phylactere.translate import PROMPT_ID
 
 FONT_PATH = Path(__file__).resolve().parent / "fonts" / "DejaVuSans-Bold.ttf"

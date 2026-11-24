@@ -4,8 +4,8 @@ import json
 import httpx
 import pytest
 
-from phylactere.cache import GlossaryEntry
 from phylactere.config import default_settings
+from phylactere.schemas import GlossaryEntry
 from phylactere.translate import (
     RESPONSE_SCHEMA,
     OllamaTranslator,

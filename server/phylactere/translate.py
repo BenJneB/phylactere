@@ -19,9 +19,9 @@ from typing import TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from phylactere.cache import GlossaryEntry
 from phylactere.config import OllamaConfig, TranslationConfig
 from phylactere.errors import ServiceError
+from phylactere.schemas import GlossaryEntry
 
 logger = logging.getLogger("phylactere.translate")
 

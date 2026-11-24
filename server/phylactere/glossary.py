@@ -17,7 +17,7 @@ import logging
 
 from pydantic import BaseModel
 
-from phylactere.cache import GlossaryEntry
+from phylactere.schemas import GlossaryEntry
 from phylactere.translate import (
     OllamaTranslator,
     language_name,
