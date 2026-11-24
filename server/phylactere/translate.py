@@ -127,10 +127,13 @@ def user_prompt(
     context: list[tuple[str, str]],
     glossary: list[GlossaryEntry],
     neighbors: list[tuple[str, str]] | None = None,
+    following: list[tuple[str, str]] | None = None,
 ) -> str:
     """``neighbors`` : autres bulles de la même image, déjà traduites (retraduction d'une
-    seule bulle, jalon 13). Section absente sinon : le prompt d'une image entière ne
-    change pas, ses traductions en cache restent valables."""
+    seule bulle, jalon 13). ``following`` : bulles suivantes de l'épisode avec leur
+    traduction du premier passage (second passage, jalons 20-21). Sections absentes
+    sinon : le prompt d'une image entière ne change pas, ses traductions en cache
+    restent valables."""
     language = language_name(target_lang)
     parts = []
     if glossary:
@@ -141,6 +144,12 @@ def user_prompt(
         parts.append(
             "Bulles précédentes de l'épisode, déjà traduites (contexte, ne pas les "
             "retraduire) :\n" + "\n".join(lines)
+        )
+    if following:
+        lines = [f"- {original} → {translated}" for original, translated in following]
+        parts.append(
+            "Bulles suivantes de l'épisode, avec une première traduction (contexte, ne "
+            "pas les retraduire) :\n" + "\n".join(lines)
         )
     if neighbors:
         lines = [f"- {original} → {translated}" for original, translated in neighbors]
@@ -306,11 +315,12 @@ class OllamaTranslator:
         glossary: list[GlossaryEntry],
         model: str,
         neighbors: list[tuple[str, str]] | None = None,
+        following: list[tuple[str, str]] | None = None,
     ) -> dict[int, str]:
         """Une requête ; renvoie les traductions reçues pour les ids demandés."""
         content = await self.chat(
             system_prompt(target_lang),
-            user_prompt(items, target_lang, context, glossary, neighbors),
+            user_prompt(items, target_lang, context, glossary, neighbors, following),
             model,
         )
         try:
@@ -331,11 +341,14 @@ class OllamaTranslator:
         glossary: list[GlossaryEntry] | None = None,
         model: str | None = None,
         neighbors: list[tuple[str, str]] | None = None,
+        following: list[tuple[str, str]] | None = None,
     ) -> list[str]:
         """Traduit les bulles d'une image ; renvoie une traduction par texte, dans l'ordre.
 
         ``model`` : modèle Ollama à utiliser (défaut : celui de la configuration).
         ``neighbors`` : autres bulles de l'image déjà traduites (retraduction d'une bulle).
+        ``following`` : bulles suivantes de l'épisode, avec leur traduction du premier
+        passage (second passage).
         """
         model = model or self._ollama.model
         context = context or []
@@ -349,7 +362,9 @@ class OllamaTranslator:
                 break
             try:
                 results.update(
-                    await self._request(pending, target_lang, context, glossary, model, neighbors)
+                    await self._request(
+                        pending, target_lang, context, glossary, model, neighbors, following
+                    )
                 )
             except InvalidResponse as exc:
                 logger.warning("Tentative %d : %s", attempt, exc)
@@ -359,7 +374,7 @@ class OllamaTranslator:
         for item_id, text in pending.items():
             try:
                 found = await self._request(
-                    {1: text}, target_lang, context, glossary, model, neighbors
+                    {1: text}, target_lang, context, glossary, model, neighbors, following
                 )
             except InvalidResponse as exc:
                 logger.warning("Bulle %d : %s", item_id, exc)

@@ -285,3 +285,55 @@ def test_stats_are_optional_and_tolerate_missing_counters():
         "prompt_eval_ms": 0.0,
         "total_ms": 0.0,
     }
+
+
+def first_pass_prompts(lang: str) -> str:
+    glossary = [GlossaryEntry(ko="민수", fr="Minsu", note="héros")]
+    return "\x00".join(
+        [
+            system_prompt(lang),
+            user_prompt({1: "안녕", 2: "가자"}, lang, [("꼬랑지!!", "Quoi ?!")], glossary),
+            user_prompt({1: "안녕"}, lang, [], []),
+            user_prompt({1: "안녕"}, lang, [("가", "A")], [], [("나", "B")]),
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("lang", "digest"),
+    [
+        ("fr", "e6a93e1f426c1e5749187050b543af0eaee6ebf3aea802e6177d12489d212c6d"),
+        ("en", "7238d79720e632317bceba6c5c4f5ae5714bd790320b8527e6b9d54b0effa5b7"),
+    ],
+)
+def test_first_pass_prompt_is_unchanged(lang, digest):
+    """Prompts du premier passage identiques au caractère près à ceux du jalon 19 : sinon
+    PROMPT_VERSION doit changer (empreintes à mettre à jour en même temps)."""
+    import hashlib
+
+    assert hashlib.sha256(first_pass_prompts(lang).encode()).hexdigest() == digest
+
+
+def test_following_section_comes_after_previous_bubbles():
+    prompt = user_prompt(
+        {1: "가"}, "fr", [("이전", "Avant")], [], following=[("다음", "Après"), ("끝", "Fin")]
+    )
+    previous = prompt.index("Bulles précédentes")
+    following = prompt.index("Bulles suivantes")
+    assert previous < following < prompt.index("Bulles à traduire")
+    assert "- 다음 → Après\n- 끝 → Fin" in prompt
+
+
+def test_empty_following_adds_no_section():
+    assert user_prompt({1: "가"}, "fr", [], [], following=[]) == user_prompt(
+        {1: "가"}, "fr", [], []
+    )
+
+
+def test_following_is_sent_on_every_attempt():
+    fake = FakeOllama("pas du json", {1: "Salut"})
+
+    translate(fake, ["안녕"], following=[("다음", "Après")])
+
+    assert len(fake.bodies) == 2
+    assert all("- 다음 → Après" in b["messages"][1]["content"] for b in fake.bodies)
