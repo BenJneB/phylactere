@@ -60,6 +60,10 @@ class Bubble(BaseModel):
     lines: list[Line]
     # Bords de l'image touchés : la bulle est peut-être coupée entre deux images Naver.
     edges: list[Edge] = []
+    # Couleurs de fond et de texte prises sur l'image ("#rrggbb"), None si le fond
+    # n'est pas uni (l'extension garde alors le fond blanc).
+    bg: str | None = None
+    fg: str | None = None
 
 
 class ImageSize(BaseModel):

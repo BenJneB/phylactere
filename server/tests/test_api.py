@@ -190,6 +190,7 @@ def test_debug_ocr_from_file_as_json(token):
     assert body["image_size"] == {"w": 690, "h": 600}
     assert [b["text"] for b in body["bubbles"]] == ["안녕하세요"]
     assert body["bubbles"][0]["box"] == {"x": 100, "y": 100, "w": 200, "h": 30}
+    assert (body["bubbles"][0]["bg"], body["bubbles"][0]["fg"]) == ("#ffffff", "#000000")
 
 
 def test_debug_ocr_refuses_other_hosts(client, token):

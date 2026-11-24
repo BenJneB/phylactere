@@ -69,6 +69,6 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 6 : finition
 - [x] Jalon 7 : tests de bout en bout de l'extension (Playwright)
 - [x] Jalon 8 : mode de traduction au défilement
-- [ ] Jalon 9 : couleur des bulles prise sur l'image
+- [x] Jalon 9 : couleur des bulles prise sur l'image
 - [ ] Jalon 10 : glossaire assisté (page d'édition, propositions par le modèle)
 - [ ] Jalon 11 : confort (signaler une bulle, préchargement de l'épisode suivant)

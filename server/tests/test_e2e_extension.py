@@ -292,6 +292,9 @@ def test_bubble_is_placed_over_its_image(browser, server, mode):
     bubble = bubble_on(page, 66, 0)
     expect(bubble).to_be_visible(timeout=15_000)
     expect(bubble).to_have_attribute("title", "가66-0")  # survol : texte d'origine
+    # Fond pris sur l'image (vert foncé uni, rgb(0, 66, 0)) et texte blanc, plus lisible.
+    expect(bubble).to_have_css("background-color", "rgb(0, 66, 0)")
+    expect(bubble).to_have_css("color", "rgb(255, 255, 255)")
 
     img = page.locator("#content_image_0").bounding_box()
     box = bubble.bounding_box()

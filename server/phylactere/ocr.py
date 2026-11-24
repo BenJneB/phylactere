@@ -2,7 +2,7 @@
 
 Le pipeline : découpage de l'image en tranches → détection + reconnaissance des lignes
 par tranche → recalage des coordonnées → filtres (hangul, confiance) → dédoublonnage des
-lignes vues dans deux tranches → regroupement en bulles.
+lignes vues dans deux tranches → regroupement en bulles → couleurs de fond et de texte.
 
 Le modèle est chargé une seule fois, en arrière-plan, et tout l'OCR tourne dans un unique
 thread pour ne pas saturer le GPU.
@@ -19,6 +19,7 @@ from typing import Literal, Protocol
 import numpy as np
 from PIL import Image
 
+from phylactere.colors import color_bubbles
 from phylactere.config import GroupingConfig, OcrConfig, cache_dir, user_config_path
 from phylactere.errors import ServiceError
 from phylactere.grouping import group_lines, mark_edges
@@ -96,6 +97,8 @@ def run_pipeline(
 
     lines = dedup_lines(lines, ocr_cfg.dedup_overlap)
     bubbles = mark_edges(group_lines(lines, grouping_cfg), height, ocr_cfg.edge_margin)
+    # Sur l'image prolongée par ses voisines : la boîte d'une bulle peut déborder.
+    color_bubbles(rgb, bubbles, ocr_cfg.bg_margin, ocr_cfg.bg_min_share)
     return OcrResult(image_size=ImageSize(w=width, h=height), bubbles=bubbles)
 
 

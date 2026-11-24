@@ -6,6 +6,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from phylactere import pipeline
+from phylactere.cache import TranslationResult
 from phylactere.config import load_settings
 from phylactere.main import TOKEN_HEADER, create_app
 from tests.helpers import FakeDetector, line, png_bytes
@@ -100,6 +102,8 @@ def test_translate_returns_blocks_and_timings(client, world):
         ("가자", "FR:가자"),
     ]
     assert body["blocks"][0]["box"] == {"x": 100, "y": 400, "w": 200, "h": 30}
+    # Image blanche : fond blanc et texte noir, pris sur l'image.
+    assert [(b["bg"], b["fg"]) for b in body["blocks"]] == [("#ffffff", "#000000")] * 2
     assert set(body["timings_ms"]) == {"fetch", "ocr", "translate"}
     assert len(world.ollama_bodies) == 1
 
@@ -248,3 +252,20 @@ def test_model_is_preloaded_at_startup(client, world):
     assert world.preloads == [
         {"model": settings.ollama.model, "messages": [], "keep_alive": settings.ollama.keep_alive}
     ]
+
+
+def test_ocr_format_version_invalidates_ocr_cache(monkeypatch):
+    settings = load_settings()
+    before = pipeline.ocr_fingerprint(settings)
+    monkeypatch.setattr(pipeline, "OCR_FORMAT_VERSION", pipeline.OCR_FORMAT_VERSION + 1)
+    assert pipeline.ocr_fingerprint(settings) != before
+
+
+def test_translation_cached_before_colors_has_no_colors():
+    # Traduction mise en cache avant le jalon 9 : pas de bg/fg, l'extension garde le blanc.
+    old = {
+        "blocks": [{"box": {"x": 1, "y": 2, "w": 3, "h": 4}, "original": "가", "translated": "a"}],
+        "image_size": {"w": 690, "h": 1600},
+    }
+    block = TranslationResult.model_validate(old).blocks[0]
+    assert (block.bg, block.fg) == (None, None)

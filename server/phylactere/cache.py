@@ -66,6 +66,10 @@ class TranslatedBlock(BaseModel):
     original: str
     translated: str
     edges: list[Edge] = []
+    # Couleurs prises sur l'image (voir Bubble). Absentes des traductions mises en cache
+    # avant le jalon 9 : None, l'extension garde le fond blanc.
+    bg: str | None = None
+    fg: str | None = None
 
 
 class TranslationResult(BaseModel):
