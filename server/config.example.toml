@@ -40,6 +40,15 @@ context_mode = "pairs"
 # Ajoute au prompt quelques exemples d'onomatopées traduites (langue cible française)
 examples = false
 
+[glossary]
+# Propositions d'entrées de glossaire (page « Glossaire » de l'extension) : nombre maximal
+# de bulles déjà traduites de la série envoyées au modèle, en partant de l'épisode ouvert
+suggest_bubbles = 200
+# Taille du contexte Ollama (jetons) pour cette requête, bien plus longue qu'une
+# traduction : 200 bulles dépassent les 4096 jetons qu'Ollama alloue par défaut aux petites
+# cartes, et le texte en trop serait coupé sans erreur. 0 = valeur par défaut d'Ollama.
+num_ctx = 16384
+
 [ocr]
 # "auto" (GPU si PaddlePaddle GPU est installé et qu'une carte NVIDIA répond, sinon CPU),
 # "gpu" ou "cpu"
@@ -67,6 +76,10 @@ bg_margin = 6
 # Part minimale (0 à 1) des pixels de la couleur dominante ; en dessous (fond dessiné
 # ou dégradé), la traduction garde un fond blanc
 bg_min_share = 0.6
+# Part minimale (0 à 1) d'une couleur entre les lettres (dans les boîtes des lignes) pour
+# l'emporter sur la marge : cartouche ajusté au texte (texte blanc sur bandeau noir).
+# Le texte couvre 35 à 58 % de la boîte d'une ligne : ne pas descendre sous 0,65
+bg_text_share = 0.7
 
 [grouping]
 # Écart vertical maximal entre deux lignes d'une même bulle, en hauteurs de ligne médianes

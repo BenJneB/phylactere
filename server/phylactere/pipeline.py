@@ -12,9 +12,11 @@ from pydantic import BaseModel, Field
 
 from phylactere.cache import Cache, TranslatedBlock, TranslationResult, sha1
 from phylactere.config import Settings
+from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError, check_url, decode_image, fetch_bytes
+from phylactere.glossary import Suggestion, suggest_entries
 from phylactere.ocr import OcrEngine
-from phylactere.queue import Priority, PriorityRunner
+from phylactere.queue import ImagePriority, PriorityRunner
 from phylactere.schemas import OcrResult
 from phylactere.translate import OllamaTranslator, prompt_id
 
@@ -30,7 +32,7 @@ class TranslateRequest(BaseModel):
     series_id: str = Field(min_length=1, max_length=64)
     episode_id: str = Field(min_length=1, max_length=64)
     index: int = Field(ge=0)
-    priority: Priority = "visible"
+    priority: ImagePriority = "visible"
     # Modèle Ollama choisi dans l'extension (défaut : celui de la configuration).
     model: str | None = Field(default=None, min_length=1, max_length=100)
     # Images voisines dans l'épisode : permettent de lire les bulles coupées entre deux images.
@@ -41,6 +43,19 @@ class TranslateRequest(BaseModel):
 class TranslateResponse(TranslationResult):
     cached: bool
     timings_ms: dict[str, int]
+
+
+class SuggestRequest(BaseModel):
+    target_lang: str | None = Field(default=None, min_length=2, max_length=10)
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    # Épisode ouvert : ses bulles passent en premier (défaut : le plus récemment traduit).
+    episode_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class SuggestResponse(BaseModel):
+    entries: list[Suggestion]
+    # Nombre de bulles envoyées au modèle.
+    bubbles: int
 
 
 # Version du format des résultats OCR mis en cache : à incrémenter quand Bubble change
@@ -242,3 +257,39 @@ class Pipeline:
             timings,
         )
         return TranslateResponse(**dict(result), cached=False, timings_ms=timings)
+
+    # --- Propositions de glossaire ---
+
+    async def suggest_glossary(self, series_id: str, request: SuggestRequest) -> SuggestResponse:
+        """Propose des entrées de glossaire à partir des bulles traduites en cache.
+
+        Passe par la file de traduction en priorité « background » : après les images, et
+        jamais deux modèles chargés à la fois dans Ollama.
+        """
+        lang = request.target_lang or self._settings.translation.target_lang
+        model = request.model or self._settings.ollama.model
+        cfg = self._settings.glossary
+        bubbles = await self._cache.series_bubbles(
+            series_id, lang, request.episode_id, cfg.suggest_bubbles
+        )
+        if not bubbles:
+            raise ServiceError(
+                "Aucune bulle traduite en cache pour cette série : lisez d'abord un épisode "
+                "avec la traduction activée.",
+                404,
+            )
+        glossary = await self._cache.get_glossary(series_id)
+        key = f"suggest:{series_id}:{lang}:{model}:{request.episode_id}"
+        start = time.perf_counter()
+        entries = await self.translation_queue.run(
+            key,
+            "background",
+            lambda: suggest_entries(self._translator, bubbles, glossary, lang, model, cfg.num_ctx),
+        )
+        logger.info(
+            "Propositions de glossaire %s : %d entrée(s) en %d ms.",
+            series_id,
+            len(entries),
+            _ms(start),
+        )
+        return SuggestResponse(entries=entries, bubbles=len(bubbles))

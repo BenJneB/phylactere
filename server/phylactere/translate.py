@@ -85,7 +85,7 @@ class TranslationError(ServiceError):
     """Échec de la traduction ; ``status_code`` est le code HTTP à renvoyer au client."""
 
 
-class _InvalidResponse(Exception):
+class InvalidResponse(Exception):
     """Réponse du modèle inexploitable (JSON invalide ou hors schéma)."""
 
 
@@ -224,7 +224,20 @@ class OllamaTranslator:
         logger.info("Modèle de traduction %s chargé.", model)
         return True
 
-    async def _chat(self, system: str, user: str, model: str) -> str:
+    async def chat(
+        self,
+        system: str,
+        user: str,
+        model: str,
+        schema: dict = RESPONSE_SCHEMA,
+        num_ctx: int = 0,
+    ) -> str:
+        """Une requête /api/chat avec sortie JSON imposée par ``schema`` ; renvoie le texte
+        de la réponse (JSON à valider par l'appelant). ``num_ctx`` : taille du contexte
+        Ollama (0 = celle d'Ollama). TranslationError si Ollama échoue."""
+        options: dict = {"temperature": self._cfg.temperature}
+        if num_ctx:
+            options["num_ctx"] = num_ctx
         body = {
             "model": model,
             "messages": [
@@ -232,9 +245,9 @@ class OllamaTranslator:
                 {"role": "user", "content": user},
             ],
             "stream": False,
-            "format": RESPONSE_SCHEMA,
+            "format": schema,
             "keep_alive": self._ollama.keep_alive,
-            "options": {"temperature": self._cfg.temperature},
+            "options": options,
         }
         send_think = model not in self._no_think
         if send_think:
@@ -253,7 +266,7 @@ class OllamaTranslator:
         if response.status_code == 400 and send_think and "think" in response.text:
             logger.info("Le modèle %s ne gère pas l'option think : désactivée.", model)
             self._no_think.add(model)
-            return await self._chat(system, user, model)
+            return await self.chat(system, user, model, schema, num_ctx)
         if response.status_code == 404:
             raise TranslationError(
                 f"Modèle « {model} » absent d'Ollama : lance « ollama pull {model} ».", 503
@@ -266,7 +279,7 @@ class OllamaTranslator:
             data = response.json()
             content = data["message"]["content"]
         except (ValueError, KeyError, TypeError) as exc:
-            raise _InvalidResponse("réponse Ollama sans message") from exc
+            raise InvalidResponse("réponse Ollama sans message") from exc
         if self._on_stats is not None:
             self._on_stats(ollama_stats(data))
         return content
@@ -280,7 +293,7 @@ class OllamaTranslator:
         model: str,
     ) -> dict[int, str]:
         """Une requête ; renvoie les traductions reçues pour les ids demandés."""
-        content = await self._chat(
+        content = await self.chat(
             system_prompt(target_lang, self._cfg.examples),
             user_prompt(items, target_lang, context, glossary, self._cfg.context_mode),
             model,
@@ -288,7 +301,7 @@ class OllamaTranslator:
         try:
             parsed = _Response.model_validate_json(content)
         except ValidationError as exc:
-            raise _InvalidResponse(f"JSON invalide : {content[:200]!r}") from exc
+            raise InvalidResponse(f"JSON invalide : {content[:200]!r}") from exc
         return {
             item.id: item.text.strip()
             for item in parsed.translations
@@ -319,7 +332,7 @@ class OllamaTranslator:
                 break
             try:
                 results.update(await self._request(pending, target_lang, context, glossary, model))
-            except _InvalidResponse as exc:
+            except InvalidResponse as exc:
                 logger.warning("Tentative %d : %s", attempt, exc)
             pending = {k: v for k, v in pending.items() if k not in results}
 
@@ -327,7 +340,7 @@ class OllamaTranslator:
         for item_id, text in pending.items():
             try:
                 found = await self._request({1: text}, target_lang, context, glossary, model)
-            except _InvalidResponse as exc:
+            except InvalidResponse as exc:
                 logger.warning("Bulle %d : %s", item_id, exc)
                 found = {}
             if 1 not in found:

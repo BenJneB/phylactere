@@ -9,15 +9,17 @@ const ORIGINS = chrome.runtime.getManifest().host_permissions;
 
 let savedModel = "";
 let currentSeries = null; // titleId de l'onglet actif, s'il affiche une page Naver
+let currentEpisode = null; // no de l'épisode affiché (page de lecture seulement)
 
 // L'URL de l'onglet est lisible grâce à la permission d'hôte sur comic.naver.com.
-async function activeSeries() {
+async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
     const url = new URL(tab?.url || "");
-    return url.hostname === "comic.naver.com" ? url.searchParams.get("titleId") : null;
+    if (url.hostname !== "comic.naver.com") return {};
+    return { series: url.searchParams.get("titleId"), episode: url.searchParams.get("no") };
   } catch {
-    return null;
+    return {};
   }
 }
 
@@ -38,10 +40,13 @@ async function init() {
   setInterval(refreshHealth, 5000);
 }
 
-// Le bouton « Vider le cache de cette série » n'apparaît que sur une page Naver.
+// Les boutons propres à la série n'apparaissent que sur une page Naver.
 async function updateSeries() {
-  currentSeries = await activeSeries();
+  const tab = await activeTab();
+  currentSeries = tab.series || null;
+  currentEpisode = tab.episode || null;
   $("clearSeries").hidden = !currentSeries;
+  $("glossary").hidden = !currentSeries;
 }
 
 async function checkPermissions() {
@@ -156,5 +161,13 @@ async function clearCache(seriesId) {
 
 $("clear").addEventListener("click", () => clearCache());
 $("clearSeries").addEventListener("click", () => clearCache(currentSeries));
+
+// Page de glossaire dans un onglet : un popup se ferme dès qu'il perd le focus.
+$("glossary").addEventListener("click", async () => {
+  const query = new URLSearchParams({ series: currentSeries });
+  if (currentEpisode) query.set("episode", currentEpisode);
+  await chrome.tabs.create({ url: chrome.runtime.getURL("glossary.html?" + query) });
+  window.close();
+});
 
 init();

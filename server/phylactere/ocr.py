@@ -98,7 +98,7 @@ def run_pipeline(
     lines = dedup_lines(lines, ocr_cfg.dedup_overlap)
     bubbles = mark_edges(group_lines(lines, grouping_cfg), height, ocr_cfg.edge_margin)
     # Sur l'image prolongée par ses voisines : la boîte d'une bulle peut déborder.
-    color_bubbles(rgb, bubbles, ocr_cfg.bg_margin, ocr_cfg.bg_min_share)
+    color_bubbles(rgb, bubbles, ocr_cfg.bg_margin, ocr_cfg.bg_min_share, ocr_cfg.bg_text_share)
     return OcrResult(image_size=ImageSize(w=width, h=height), bubbles=bubbles)
 
 

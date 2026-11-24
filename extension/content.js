@@ -58,6 +58,17 @@
     else if (LIVE_SETTINGS.some((k) => k in changes)) pump();
   });
 
+  // Glossaire de la série modifié (page de glossaire, via background.js) : le serveur a
+  // effacé les traductions de la série, on retraduit l'épisode avec le nouveau glossaire.
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type !== "glossary-changed") return false;
+    const mine = !!episode && msg.seriesId === episode.seriesId;
+    if (mine) reset();
+    // Réponse explicite : sans elle, la promesse de l'expéditeur est rejetée.
+    sendResponse({ reset: mine });
+    return false;
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.altKey && e.code === "KeyT" && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
       e.preventDefault();

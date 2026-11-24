@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
-from phylactere.colors import background_color, relative_luminance, text_color, to_hex
+from phylactere.colors import (
+    background_color,
+    relative_luminance,
+    text_color,
+    to_hex,
+)
 from phylactere.ocr import run_pipeline, run_pipeline_with_neighbors
 from phylactere.schemas import Box, Bubble
 from tests.helpers import GROUPING, FakeDetector, line
@@ -15,11 +20,12 @@ BLACK = (0, 0, 0)
 NAVY = (20, 30, 70)
 
 
-def draw_text(image: Image.Image, box: Box, color) -> None:
-    """« Texte » : barres verticales serrées qui remplissent la boîte de la ligne."""
+def draw_text(image: Image.Image, box: Box, color, stroke: int = 2) -> None:
+    """« Texte » : barres verticales de ``stroke`` px tous les 4 px dans la boîte de la
+    ligne (2 px : la moitié de la boîte, comme un vrai texte avec son anticrénelage)."""
     draw = ImageDraw.Draw(image)
     for x in range(box.x, box.right, 4):
-        draw.rectangle((x, box.y, x + 2, box.bottom - 1), fill=color)
+        draw.rectangle((x, box.y, x + stroke - 1, box.bottom - 1), fill=color)
 
 
 def image_with_text(background, text_color, lines, size=(690, 600)) -> Image.Image:
@@ -48,11 +54,21 @@ def test_navy_narration_with_white_text():
 
 def test_text_pixels_do_not_count():
     # La boîte des lignes couvre presque toute la zone échantillonnée : sans le masque,
-    # le texte noir l'emporterait sur le fond bleu nuit.
+    # le texte noir ferait passer le fond bleu nuit sous les 60 %.
     lines = [line(100, 100, 400, h=200)]
-    image = Image.new("RGB", (690, 600), NAVY)
-    ImageDraw.Draw(image).rectangle((100, 100, 499, 299), fill=BLACK)
+    image = image_with_text(NAVY, BLACK, lines)
     assert colors_of(image, lines) == [(to_hex(NAVY), "#ffffff")]
+
+
+def test_box_fitted_to_text_takes_its_color():
+    # Cartouche noir à peine plus grand que le texte blanc, sur fond blanc (nom de lieu,
+    # épisode 729047/66) : la marge tombe surtout hors du cartouche et serait blanche ; le
+    # fond entre les lettres, noir à 75 %, l'emporte.
+    lines = [line(200, 200, 160, h=36)]
+    image = Image.new("RGB", (690, 600), WHITE)
+    ImageDraw.Draw(image).rounded_rectangle((194, 197, 365, 238), radius=12, fill=BLACK)
+    draw_text(image, lines[0].box, WHITE, stroke=1)
+    assert colors_of(image, lines) == [("#000000", "#ffffff")]
 
 
 def test_noisy_background_has_no_color():

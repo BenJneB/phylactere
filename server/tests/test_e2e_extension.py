@@ -1,4 +1,4 @@
-"""Tests de bout en bout de l'extension (jalons 7 et 8).
+"""Tests de bout en bout de l'extension (jalons 7, 8 et 10).
 
 Chromium (Playwright) charge l'extension non empaquetée, ouvre une fausse page d'épisode
 Naver et parle à un vrai serveur Phylactère lancé dans un thread, dont l'OCR, Ollama et le
@@ -109,6 +109,12 @@ class World:
         self.calls: list[tuple[int, int, str]] = []  # (épisode, index, priorité)
         self.in_flight = 0
         self.max_in_flight = 0
+        self.suggest_requests = 0
+        # Réponse du modèle aux propositions : un terme présent dans les bulles, un inventé.
+        self.suggestions = [
+            {"ko": "가66", "fr": "Ga", "note": "héros"},
+            {"ko": "없는말", "fr": "Inventé", "note": ""},
+        ]
 
     def images(self, request: httpx.Request) -> httpx.Response:
         match = URL_RE.search(request.url.path)
@@ -123,10 +129,18 @@ class World:
         if not body["messages"]:  # préchargement du modèle
             return httpx.Response(200, json={})
         await asyncio.sleep(self.ollama_delay)
-        bubbles = json.loads(body["messages"][1]["content"].rsplit("\n", 1)[1])
+        if "entries" in body["format"]["properties"]:  # propositions de glossaire (jalon 10)
+            self.suggest_requests += 1
+            content = {"entries": self.suggestions}
+            return httpx.Response(200, json={"message": {"content": json.dumps(content)}})
+        user = body["messages"][1]["content"]
+        bubbles = json.loads(user.rsplit("\n", 1)[1])
+        # Avec un glossaire, la traduction le montre : on voit l'épisode retraduit.
+        prefix = "GL" if "Glossaire de la série" in user else "FR"
         content = {
             "translations": [
-                {"id": b["id"], "original": b["texte"], "text": f"FR:{b['texte']}"} for b in bubbles
+                {"id": b["id"], "original": b["texte"], "text": f"{prefix}:{b['texte']}"}
+                for b in bubbles
             ]
         }
         return httpx.Response(200, json={"message": {"content": json.dumps(content)}})
@@ -488,3 +502,50 @@ def test_popup_saves_translate_mode(browser):
 
     stored = worker.evaluate("() => chrome.storage.local.get(['translateMode', 'lookahead'])")
     assert stored == {"translateMode": "scroll", "lookahead": 20}
+
+
+def test_glossary_page_suggests_saves_and_retranslates(browser, server, world):
+    """Jalon 10 : propositions du modèle (terme inventé écarté), ajout de la sélection,
+    enregistrement, puis l'onglet de l'épisode se retraduit avec le glossaire."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    episode = open_episode(context)
+    expect(bubble_on(episode, 66, 1)).to_be_visible(timeout=15_000)
+
+    extension_id = worker.url.split("/")[2]
+    page = context.new_page()
+    page.goto(f"chrome-extension://{extension_id}/glossary.html?series={SERIES}&episode=66")
+    expect(page.locator("#seriesId")).to_have_text(SERIES)
+    expect(page.locator("#noEntries")).to_be_visible()
+
+    page.click("#suggest")
+    rows = page.locator("#suggestionRows tr")
+    expect(rows).to_have_count(1, timeout=10_000)  # « 없는말 » n'est dans aucune bulle
+    expect(rows.first).to_contain_text("가66")
+    expect(rows.first).to_contain_text("가66-0 → FR:가66-0")  # bulle d'exemple
+    assert world.suggest_requests == 1
+    rows.first.locator("[data-field=fr]").fill("Ga-yu")
+
+    page.click("#addSelected")
+    expect(page.locator("#suggestions")).to_be_hidden()
+    expect(page.locator("#entries tr")).to_have_count(1)
+    assert server_glossary(server) == []  # rien n'est enregistré avant « Enregistrer »
+
+    page.click("#save")
+    expect(page.locator("#saveStatus")).to_contain_text("Glossaire enregistré (1 entrée(s)).")
+    expect(page.locator("#saveStatus")).to_contain_text("1 onglet(s)")
+    assert server_glossary(server) == [{"ko": "가66", "fr": "Ga-yu", "note": "héros"}]
+
+    # L'épisode se retraduit avec le glossaire, sans rechargement.
+    expect(bubble_on(episode, 66, 0)).to_have_count(0, timeout=15_000)
+    expect(episode.locator(BUBBLE, has_text="GL:가66-0")).to_be_visible(timeout=15_000)
+    assert world.requests_for(66).count((0, "visible")) == 2
+
+
+def server_glossary(server) -> list[dict]:
+    response = httpx.get(
+        f"http://127.0.0.1:{server.port}/glossary/{SERIES}",
+        headers={"X-Phylactere-Token": server.token},
+    )
+    return response.json()

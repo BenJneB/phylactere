@@ -34,7 +34,14 @@ from phylactere.debug import render_debug
 from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError
 from phylactere.ocr import OcrEngine
-from phylactere.pipeline import Pipeline, TranslateRequest, TranslateResponse, decode_images
+from phylactere.pipeline import (
+    Pipeline,
+    SuggestRequest,
+    SuggestResponse,
+    TranslateRequest,
+    TranslateResponse,
+    decode_images,
+)
 from phylactere.schemas import OcrResult
 from phylactere.translate import OllamaTranslator
 
@@ -43,6 +50,8 @@ TOKEN_HEADER = "X-Phylactere-Token"
 EXTENSION_ORIGIN_REGEX = r"^(chrome|moz)-extension://[a-z0-9-]+$"
 # Refuse les requêtes dont l'en-tête Host n'est pas local (protection contre le DNS rebinding).
 ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+
+logger = logging.getLogger("phylactere.main")
 OLLAMA_TIMEOUT_S = 2.0
 
 
@@ -172,9 +181,23 @@ def create_app(
     async def put_glossary(
         request: Request, series_id: str, entries: list[GlossaryEntry]
     ) -> list[GlossaryEntry]:
-        """Remplace le glossaire ; les traductions en cache de la série sont effacées."""
-        await request.app.state.cache.put_glossary(series_id, entries)
+        """Remplace le glossaire ; les traductions en cache des images de la série qui
+        mentionnent un terme ajouté, retiré ou modifié sont effacées."""
+        removed = await request.app.state.cache.put_glossary(series_id, entries)
+        logger.info(
+            "Glossaire %s : %d entrée(s), %d image(s) à retraduire.",
+            series_id,
+            len(entries),
+            removed,
+        )
         return entries
+
+    @protected.post("/glossary/{series_id}/suggest")
+    async def suggest_glossary(
+        request: Request, series_id: str, body: SuggestRequest
+    ) -> SuggestResponse:
+        """Propositions d'entrées (rien n'est enregistré), à partir des bulles en cache."""
+        return await request.app.state.pipeline.suggest_glossary(series_id, body)
 
     @protected.delete("/cache")
     async def clear_cache(request: Request, series_id: str | None = None) -> dict:

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossaire — Phylactère</title>
+<link rel="icon" href="icons/icon-32.png">
+<style>
+  :root {
+    --bg: #f3f5fa; --ink: #1d2a44; --muted: #5d6a85; --field: #fff; --panel: #fff;
+    --line: #cfd6e4; --accent: #2f5bd3; --ok: #1f7a4d; --warn: #9a5b00; --err: #a3262b;
+    --warn-bg: #fff4e0;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161c2a; --ink: #e8ecf5; --muted: #9aa6bf; --field: #222a3b; --panel: #1c2334;
+      --line: #36415a; --accent: #7d9bff; --ok: #5fd39a; --warn: #f0b45a; --err: #ff8a8f;
+      --warn-bg: #3a2c14;
+      color-scheme: dark;
+    }
+  }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; }
+  .bubble { position: relative; display: inline-block; padding: 6px 14px; margin-bottom: 12px;
+            background: var(--field); border: 2px solid var(--ink); border-radius: 18px; }
+  .bubble::after { content: ""; position: absolute; left: 22px; bottom: -9px; width: 12px; height: 12px;
+                   background: var(--field); border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink);
+                   transform: rotate(45deg); }
+  h1 { margin: 0; font-size: 19px; }
+  h2 { margin: 0 0 4px; font-size: 16px; }
+  section { margin-top: 20px; padding: 16px; background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .warning { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--warn);
+             background: var(--warn-bg); border-radius: 4px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 6px; }
+  td { padding: 3px 6px; vertical-align: top; }
+  td.narrow { width: 1%; white-space: nowrap; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line);
+                     border-radius: 6px; background: var(--field); color: var(--ink); font: inherit; }
+  input.invalid { border-color: var(--err); }
+  .col-ko { width: 22%; } .col-fr { width: 28%; }
+  button { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--accent); font: inherit;
+           font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
+  .primary { background: var(--accent); color: #fff; }
+  .secondary { background: transparent; color: var(--accent); }
+  .icon { padding: 4px 9px; border-color: var(--line); background: transparent; color: var(--muted); }
+  .icon:hover { color: var(--err); border-color: var(--err); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+  .status { min-height: 18px; font-size: 13px; }
+  .ok { color: var(--ok); } .err { color: var(--err); } .busy { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; padding: 10px 6px; }
+  .examples { margin: 4px 0 2px; padding: 0; list-style: none; font-size: 12px; color: var(--muted); }
+  .examples li { margin-top: 2px; }
+  .examples .ko { color: var(--ink); }
+  .suggestion td { border-top: 1px solid var(--line); padding-top: 8px; }
+  .term { font-size: 15px; font-weight: 600; }
+  [hidden] { display: none !important; }
+  @media (max-width: 640px) {
+    thead { display: none; }
+    tr { display: grid; grid-template-columns: 1fr auto; gap: 4px; padding: 6px 0;
+         border-bottom: 1px solid var(--line); }
+    td { padding: 0; } td.narrow { width: auto; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="bubble"><h1>Glossaire de la série <span id="seriesId"></span></h1></div>
+  <p class="hint">Chaque terme coréen sera toujours traduit de la même façon : noms des
+    personnages, surnoms, termes d’adresse. Survolez une bulle traduite sur la page de
+    l’épisode pour voir son texte coréen.</p>
+
+  <section aria-labelledby="h-entries">
+    <h2 id="h-entries">Entrées</h2>
+    <table>
+      <thead><tr><th class="col-ko">Coréen</th><th class="col-fr">Traduction</th><th>Note</th><th></th></tr></thead>
+      <tbody id="entries"></tbody>
+    </table>
+    <div id="noEntries" class="empty" hidden>Aucune entrée. Ajoutez-en une, ou demandez des propositions ci-dessous.</div>
+    <div class="actions">
+      <button id="addRow" class="secondary">Ajouter une ligne</button>
+      <button id="save" class="primary">Enregistrer</button>
+      <span id="saveStatus" class="status" role="status" aria-live="polite"></span>
+    </div>
+    <p class="warning">L’enregistrement efface les traductions en cache des images où
+      apparaît un terme ajouté, retiré ou modifié : elles seront retraduites avec le
+      nouveau glossaire (tout de suite dans les onglets ouverts sur la série, à leur
+      prochaine ouverture pour les autres épisodes). Les autres images restent en cache.</p>
+  </section>
+
+  <section aria-labelledby="h-suggest">
+    <h2 id="h-suggest">Propositions</h2>
+    <p class="hint">Le modèle relève les noms et termes récurrents dans les bulles déjà
+      traduites de la série (en partant de l’épisode ouvert). Rien n’est enregistré :
+      cochez les propositions utiles, corrigez la traduction si besoin, puis ajoutez-les
+      au glossaire et enregistrez.</p>
+    <div class="actions">
+      <button id="suggest" class="primary">Proposer des entrées</button>
+      <span id="suggestStatus" class="status" role="status" aria-live="polite"></span>
+    </div>
+    <div id="suggestions" hidden>
+      <table>
+        <thead><tr><th></th><th class="col-ko">Coréen</th><th class="col-fr">Traduction</th><th>Note et bulles où le terme apparaît</th></tr></thead>
+        <tbody id="suggestionRows"></tbody>
+      </table>
+      <div class="actions">
+        <button id="addSelected" class="primary">Ajouter la sélection</button>
+        <button id="toggleAll" class="secondary">Tout décocher</button>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="defaults.js"></script>
+<script src="glossary.js"></script>
+</body>
+</html>

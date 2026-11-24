@@ -17,7 +17,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     translate: () => translate(msg.request),
     health: () => health(),
     models: () => models(),
-    "clear-cache": () => clearCache(msg.seriesId)
+    "clear-cache": () => clearCache(msg.seriesId),
+    "glossary-get": () => call(`/glossary/${encodeURIComponent(msg.seriesId)}`),
+    "glossary-put": () => putGlossary(msg.seriesId, msg.entries),
+    "glossary-suggest": () => suggestGlossary(msg.seriesId, msg.episodeId)
   };
   const handler = handlers[msg?.type];
   if (!handler) return false;
@@ -100,4 +103,52 @@ function models() {
 function clearCache(seriesId) {
   const query = seriesId ? `?series_id=${encodeURIComponent(seriesId)}` : "";
   return call("/cache" + query, { method: "DELETE" });
+}
+
+// Enregistre le glossaire (le serveur efface les traductions en cache des images qui
+// mentionnent un terme ajouté, retiré ou modifié), puis
+// prévient les onglets Naver ouverts sur cette série : ils se retraduisent avec lui.
+async function putGlossary(seriesId, entries) {
+  const res = await call(`/glossary/${encodeURIComponent(seriesId)}`, { method: "PUT", body: entries });
+  if (res.ok) res.notified = await notifySeriesTabs(seriesId);
+  return res;
+}
+
+// L'URL des onglets Naver est lisible grâce à la permission d'hôte sur comic.naver.com.
+async function notifySeriesTabs(seriesId) {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: "https://comic.naver.com/*" });
+  } catch {
+    return 0;
+  }
+  let notified = 0;
+  for (const tab of tabs) {
+    let titleId = null;
+    try {
+      titleId = new URL(tab.url).searchParams.get("titleId");
+    } catch {
+      continue;
+    }
+    if (titleId !== seriesId) continue;
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: "glossary-changed", seriesId });
+      notified++;
+    } catch {
+      // onglet sans content script (page en chargement, extension rechargée depuis)
+    }
+  }
+  return notified;
+}
+
+// Propositions d'entrées : le serveur les calcule après les images en attente (priorité
+// « background ») ; le délai est donc celui d'une traduction.
+async function suggestGlossary(seriesId, episodeId) {
+  const s = await settings();
+  const body = { target_lang: s.targetLang };
+  if (s.model) body.model = s.model;
+  if (episodeId) body.episode_id = episodeId;
+  return call(`/glossary/${encodeURIComponent(seriesId)}/suggest`, {
+    method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s
+  });
 }

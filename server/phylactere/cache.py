@@ -4,7 +4,8 @@
   modèle de traduction ou de langue sans refaire l'OCR.
 - Traductions : clé = sha1(image_url) + langue + modèle + PROMPT_VERSION. Chaque ligne
   garde la série, l'épisode et l'index pour fournir le contexte (bulles précédentes).
-- Glossaires : une liste d'entrées par série.
+- Glossaires : une liste d'entrées par série. Le modifier efface seulement les traductions
+  des images qui mentionnent un terme ajouté, retiré ou modifié.
 
 sqlite3 est synchrone : les appels passent par un thread (asyncio.to_thread), protégés par
 un verrou (une seule connexion).
@@ -56,6 +57,23 @@ class GlossaryEntry(BaseModel):
     ko: str
     fr: str
     note: str = ""
+
+
+def _compact(text: str) -> str:
+    """Texte sans espaces : l'OCR en perd ou en ajoute (lignes jointes par une espace)."""
+    return "".join(text.split())
+
+
+def changed_terms(old: list[GlossaryEntry], new: list[GlossaryEntry]) -> set[str]:
+    """Termes coréens dont l'entrée a été ajoutée, retirée ou modifiée (traduction, note)."""
+    before = {_compact(e.ko): (e.fr.strip(), e.note.strip()) for e in old}
+    after = {_compact(e.ko): (e.fr.strip(), e.note.strip()) for e in new}
+    return {ko for ko in before.keys() | after.keys() if ko and before.get(ko) != after.get(ko)}
+
+
+def mentions(original: str, terms: set[str]) -> bool:
+    text = _compact(original)
+    return any(term in text for term in terms)
 
 
 class TranslatedBlock(BaseModel):
@@ -215,6 +233,40 @@ class Cache:
             self._context, series_id, episode_id, image_index, target_lang, model, limit
         )
 
+    def _series_bubbles(
+        self, series_id: str, target_lang: str, episode_id: str | None, limit: int
+    ) -> list[tuple[str, str]]:
+        rows = self._db.execute(
+            "SELECT episode_id, image_index, created, result FROM translation"
+            " WHERE series_id = ? AND target_lang = ?",
+            (series_id, target_lang),
+        ).fetchall()
+        # Épisode demandé d'abord, puis les autres du plus récemment traduit au plus ancien ;
+        # dans un épisode, l'ordre de lecture. Une image traduite par plusieurs modèles
+        # n'est comptée qu'une fois (même original).
+        latest: dict[str, float] = {}
+        for episode, _, created, _ in rows:
+            latest[episode] = max(created, latest.get(episode, 0.0))
+        rows.sort(key=lambda r: (r[0] != episode_id, -latest[r[0]], r[0], r[1], -r[2]))
+        pairs: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for *_, raw in rows:
+            for block in TranslationResult.model_validate_json(raw).blocks:
+                if block.original in seen:
+                    continue
+                seen.add(block.original)
+                pairs.append((block.original, block.translated))
+                if len(pairs) == limit:
+                    return pairs
+        return pairs
+
+    async def series_bubbles(
+        self, series_id: str, target_lang: str, episode_id: str | None, limit: int
+    ) -> list[tuple[str, str]]:
+        """Bulles traduites en cache de la série (original, traduction), sans doublon : celles
+        de ``episode_id`` d'abord, puis des épisodes les plus récemment traduits."""
+        return await self._run(self._series_bubbles, series_id, target_lang, episode_id, limit)
+
     # --- Glossaires ---
 
     def _get_glossary(self, series_id: str) -> list[GlossaryEntry]:
@@ -223,18 +275,32 @@ class Cache:
         ).fetchone()
         return [GlossaryEntry.model_validate(e) for e in json.loads(row[0])] if row else []
 
-    def _put_glossary(self, series_id: str, entries: list[GlossaryEntry]) -> None:
+    def _put_glossary(self, series_id: str, entries: list[GlossaryEntry]) -> int:
+        changed = changed_terms(self._get_glossary(series_id), entries)
         data = json.dumps([e.model_dump() for e in entries], ensure_ascii=False)
         self._db.execute("INSERT OR REPLACE INTO glossary VALUES (?, ?)", (series_id, data))
-        # Les traductions existantes ne tiennent pas compte du nouveau glossaire.
-        self._db.execute("DELETE FROM translation WHERE series_id = ?", (series_id,))
+        # Seules les images dont une bulle contient un terme ajouté, retiré ou modifié sont
+        # à retraduire ; les autres restent en cache.
+        stale = []
+        if changed:
+            rows = self._db.execute(
+                "SELECT key, result FROM translation WHERE series_id = ?", (series_id,)
+            )
+            for key, raw in rows:
+                blocks = TranslationResult.model_validate_json(raw).blocks
+                if any(mentions(block.original, changed) for block in blocks):
+                    stale.append((key,))
+        self._db.executemany("DELETE FROM translation WHERE key = ?", stale)
         self._db.commit()
+        return len(stale)
 
     async def get_glossary(self, series_id: str) -> list[GlossaryEntry]:
         return await self._run(self._get_glossary, series_id)
 
-    async def put_glossary(self, series_id: str, entries: list[GlossaryEntry]) -> None:
-        await self._run(self._put_glossary, series_id, entries)
+    async def put_glossary(self, series_id: str, entries: list[GlossaryEntry]) -> int:
+        """Remplace le glossaire ; efface les traductions en cache des images de la série
+        qui mentionnent un terme ajouté, retiré ou modifié. Renvoie leur nombre."""
+        return await self._run(self._put_glossary, series_id, entries)
 
     # --- Vidage ---
 

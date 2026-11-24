@@ -103,3 +103,36 @@ def test_pending_count(priority):
         return pending
 
     assert asyncio.run(go()) == 1
+
+
+def test_background_served_after_prefetch():
+    """Propositions de glossaire (jalon 10) : après toutes les images, même préchargées."""
+    order: list[str] = []
+
+    async def go():
+        runner = PriorityRunner("test")
+        gate = asyncio.Event()
+
+        def job(name):
+            async def work():
+                if name == "bloque":
+                    await gate.wait()
+                order.append(name)
+
+            return work
+
+        runner.start()
+        first = asyncio.create_task(runner.run("bloque", "visible", job("bloque")))
+        await asyncio.sleep(0)  # le worker prend « bloque »
+        tasks = [
+            asyncio.create_task(runner.run("fond", "background", job("fond"))),
+            asyncio.create_task(runner.run("p1", "prefetch", job("p1"))),
+            asyncio.create_task(runner.run("v1", "visible", job("v1"))),
+        ]
+        await asyncio.sleep(0)
+        gate.set()
+        await asyncio.gather(first, *tasks)
+        await runner.stop()
+
+    asyncio.run(go())
+    assert order == ["bloque", "v1", "p1", "fond"]

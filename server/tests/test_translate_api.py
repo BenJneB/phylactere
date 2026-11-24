@@ -227,8 +227,10 @@ def test_glossary_roundtrip_and_used_in_prompt(client, world):
     assert "재웅 → Jae-woong (héros)" in world.ollama_bodies[0]["messages"][1]["content"]
 
 
-def test_new_glossary_retranslates(client, world):
-    client.post("/translate", json=request())
+def test_new_glossary_retranslates_only_images_with_the_term(client, world):
+    client.post("/translate", json=request())  # bulles « 안녕 » et « 가자 »
+    client.put("/glossary/729047", json=[{"ko": "없음", "fr": "Rien"}])
+    assert client.post("/translate", json=request()).json()["cached"] is True
     client.put("/glossary/729047", json=[{"ko": "가", "fr": "A"}])
     assert client.post("/translate", json=request()).json()["cached"] is False
 

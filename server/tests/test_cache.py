@@ -86,17 +86,45 @@ def test_context_is_limited_to_episode_language_and_model(cache):
     assert run(cache.context("s", "66", 1, "fr", "m", 15)) == [("bon", "ok")]
 
 
-def test_glossary_roundtrip_and_invalidates_series_translations(cache):
-    put(cache, 0, ("a", "A"))
-    put(cache, 0, ("autre", "x"), series="s2")
+def test_glossary_roundtrip_and_invalidates_images_mentioning_the_term(cache):
+    put(cache, 0, ("재웅아 가자", "Allez, Réung"))
+    put(cache, 1, ("안녕", "Salut"))
+    put(cache, 2, ("재 웅", "Réung"))  # espace ajoutée par l'OCR (deux lignes)
+    put(cache, 0, ("재웅", "x"), series="s2")
     entries = [GlossaryEntry(ko="재웅", fr="Jae-woong", note="héros")]
 
-    run(cache.put_glossary("s", entries))
+    assert run(cache.put_glossary("s", entries)) == 2
 
     assert run(cache.get_glossary("s")) == entries
     assert run(cache.get_glossary("inconnue")) == []
     assert run(cache.get_translation("s660frm")) is None
-    assert run(cache.get_translation("s2660frm")) is not None
+    assert run(cache.get_translation("s662frm")) is None
+    assert run(cache.get_translation("s661frm")) is not None  # sans le terme : gardée
+    assert run(cache.get_translation("s2660frm")) is not None  # autre série
+
+
+def test_unchanged_glossary_entries_keep_translations(cache):
+    run(cache.put_glossary("s", [GlossaryEntry(ko="재웅", fr="Jae-woong")]))
+    put(cache, 0, ("재웅아", "Jae-woong !"))
+    put(cache, 1, ("꼬랑지!!", "Petite queue !!"))
+
+    # Même glossaire, réordonné, plus une entrée : seule l'image du nouveau terme part.
+    entries = [
+        GlossaryEntry(ko="꼬랑지", fr="Petite Queue"),
+        GlossaryEntry(ko=" 재웅", fr="Jae-woong"),
+    ]
+    assert run(cache.put_glossary("s", entries)) == 1
+    assert run(cache.get_translation("s660frm")) is not None
+    assert run(cache.get_translation("s661frm")) is None
+
+    # Note modifiée : elle entre dans le prompt, l'image est retraduite.
+    put(cache, 1, ("꼬랑지!!", "Petite Queue !!"))
+    entries[0] = GlossaryEntry(ko="꼬랑지", fr="Petite Queue", note="surnom")
+    assert run(cache.put_glossary("s", entries)) == 1
+
+    # Terme retiré : l'image qui l'utilisait est retraduite sans lui.
+    assert run(cache.put_glossary("s", entries[:1])) == 1
+    assert run(cache.get_translation("s660frm")) is None
 
 
 def test_clear_series_or_all(cache):
@@ -107,7 +135,30 @@ def test_clear_series_or_all(cache):
     run(cache.put_ocr("o2", "s2", ocr))
     run(cache.put_glossary("s", [GlossaryEntry(ko="가", fr="A")]))
 
-    assert run(cache.clear("s")) == 1  # le glossaire a déjà effacé la traduction de « s »
+    assert run(cache.clear("s")) == 2  # traduction (sans le terme « 가 ») et OCR de « s »
     assert run(cache.get_ocr("o1")) is None and run(cache.get_ocr("o2")) is not None
     assert run(cache.clear()) == 2
     assert run(cache.get_glossary("s")) != []  # les glossaires sont conservés
+
+
+def test_series_bubbles_start_with_the_given_episode(cache, monkeypatch):
+    clock = iter(range(100))
+    monkeypatch.setattr("phylactere.cache.time.time", lambda: float(next(clock)))
+    put(cache, 0, ("a1", "A1"), episode="1")
+    put(cache, 1, ("a2", "A2"), episode="1")
+    put(cache, 0, ("c1", "C1"), episode="3")
+    put(cache, 0, ("b1", "B1"), ("a1", "A1 bis"), episode="2")  # doublon de a1
+    put(cache, 1, ("x", "X"), episode="2", lang="en")  # autre langue
+    put(cache, 0, ("y", "Y"), episode="2", series="autre")  # autre série
+    put(cache, 0, ("b1", "B1 m2"), episode="2", model="m2")  # même image, autre modèle
+
+    bubbles = run(cache.series_bubbles("s", "fr", "1", 10))
+    assert bubbles == [("a1", "A1"), ("a2", "A2"), ("b1", "B1 m2"), ("c1", "C1")]
+
+    # Sans épisode : du plus récemment traduit au plus ancien ; limite respectée.
+    assert run(cache.series_bubbles("s", "fr", None, 3)) == [
+        ("b1", "B1 m2"),
+        ("a1", "A1 bis"),
+        ("c1", "C1"),
+    ]
+    assert run(cache.series_bubbles("vide", "fr", None, 10)) == []

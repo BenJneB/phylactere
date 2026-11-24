@@ -97,7 +97,17 @@ Lancer `start.ps1` alors que le serveur tourne déjà n'a pas d'effet : il l'ind
 
 ## Glossaire d'une série
 
-Les noms propres et les surnoms se traduisent mal sans contexte, et peuvent changer d'une bulle à l'autre. Le glossaire d'une série fixe leur traduction. L'identifiant de la série est le `titleId` de l'URL de l'épisode (`…/detail?titleId=729047&no=66` → `729047`).
+Les noms propres et les surnoms se traduisent mal sans contexte, et peuvent changer d'une bulle à l'autre. Le glossaire d'une série fixe leur traduction.
+
+Sur une page d'épisode Naver : popup › **Glossaire de cette série**. La page s'ouvre dans un onglet :
+
+1. lire d'abord un épisode (ou plusieurs) avec la traduction activée : les propositions partent des bulles déjà traduites ;
+2. **Proposer des entrées** : le modèle relève les noms, surnoms, titres et termes d'adresse récurrents (jusqu'à 200 bulles, en partant de l'épisode ouvert ; réglage `[glossary] suggest_bubbles`). Chaque proposition montre une ou deux bulles où le terme apparaît, avec leur traduction actuelle, pour juger sans lire le coréen. Les termes inventés par le modèle (absents des bulles) sont écartés. La demande passe après les images en cours de traduction ;
+3. cocher les propositions utiles, corriger la traduction si besoin, **Ajouter la sélection**, puis **Enregistrer**.
+
+L'enregistrement remplace le glossaire et efface les traductions en cache des seules images dont une bulle contient un terme ajouté, retiré ou modifié : les autres restent en cache. Les onglets ouverts sur la série se retraduisent tout de suite (les images inchangées reviennent instantanément du cache), les autres épisodes à leur prochaine ouverture. La colonne « Traduction » contient la traduction dans la langue cible, quelle qu'elle soit.
+
+Sans l'extension, en PowerShell (l'identifiant de la série est le `titleId` de l'URL de l'épisode : `…/detail?titleId=729047&no=66` → `729047`) :
 
 ```powershell
 $headers = @{ 'X-Phylactere-Token' = '<jeton>' }
@@ -110,7 +120,7 @@ Invoke-RestMethod -Method Put -Uri http://127.0.0.1:8765/glossary/729047 -Header
     -ContentType 'application/json; charset=utf-8' -Body $body
 ```
 
-Le glossaire est remplacé en entier à chaque envoi, et les traductions en cache de la série sont effacées (elles seront refaites avec lui). Lecture : `Invoke-RestMethod http://127.0.0.1:8765/glossary/729047 -Headers $headers`. La colonne `fr` contient la traduction dans la langue cible, quelle qu'elle soit.
+Le glossaire est remplacé en entier à chaque envoi. Lecture : `Invoke-RestMethod http://127.0.0.1:8765/glossary/729047 -Headers $headers`.
 
 ## Modèle de traduction
 
