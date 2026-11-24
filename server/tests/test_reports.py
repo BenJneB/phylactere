@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from phylactere.cache import read_corrections
 from phylactere.config import load_settings, reports_dir
 from phylactere.main import TOKEN_HEADER, create_app
 from phylactere.reports import CROP_MARGIN, crop_bubble
@@ -209,3 +210,18 @@ def test_cancel_report_refuses_foreign_names(client):
     for name in ("index", "..%2Fconfig", "20260101-000000-zzzzzz"):
         assert client.delete(f"/report/{name}").status_code == 404
     assert victim.exists()
+
+
+def test_html_report_lists_corrections(client):
+    blocks = client.post("/translate", json=request()).json()["blocks"]
+    body = report_body(blocks[1], text="<i>À la main</i>")
+    assert client.put("/correction", json=body).status_code == 200
+    script = load_script()
+
+    corrections = read_corrections(load_settings().cache.resolved_path())
+    html = script.render_html([], corrections)
+
+    assert "Bulles corrigées (1)" in html and "Aucun signalement" in html
+    assert "&lt;i&gt;À la main&lt;/i&gt;" in html  # texte échappé
+    assert blocks[1]["translated"] in html and "가자" in html
+    assert "épisode 66" in html

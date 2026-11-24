@@ -810,3 +810,60 @@ def test_shift_alt_t_retranslates_most_visible_image(browser, server, world):
     # Pas de masquage des traductions : Maj+Alt+T n'est pas Alt+T.
     expect(page.locator(BADGE)).to_contain_text("Traduit")
     assert world.ocr_runs == ocr_runs
+
+
+# --- Jalon 14 : corriger une bulle à la main ---
+
+
+def test_ctrl_click_corrects_bubble(browser, server, world):
+    """Ctrl+clic, saisie, Entrée : la correction reste au rechargement ; Échap ne change
+    rien ; Maj+clic sur une bulle corrigée est refusé ; un texte vide l'efface."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    page = open_episode(context)
+    bubble = bubble_on(page, 66, 0)
+    expect(bubble).to_be_visible(timeout=15_000)
+    bubble = page.locator(BUBBLE).first
+
+    # Échap : rien ne change.
+    bubble.click(modifiers=["Control"])
+    expect(bubble).to_have_attribute("contenteditable", "true")
+    page.keyboard.type("Oublié")
+    page.keyboard.press("Escape")
+    expect(bubble).not_to_have_attribute("contenteditable", re.compile(".*"))
+    expect(bubble).to_have_text(expected_text(66, 0))
+
+    # Saisie (le texte est sélectionné : il est remplacé), retour à la ligne, Entrée.
+    bubble.click(modifiers=["Control"])
+    page.keyboard.type("Bonjour")
+    page.keyboard.press("Shift+Enter")
+    page.keyboard.type("à tous")
+    page.keyboard.press("Enter")
+    expect(page.locator(BADGE)).to_contain_text("Bulle corrigée")
+    expect(bubble).to_have_text("Bonjour\nà tous")
+    expect(bubble).to_have_attribute("data-corrected", "")
+    expect(bubble).not_to_have_class(re.compile(r"\bphy-peek\b"))
+
+    # Retraduire une bulle corrigée est refusé, sans appel au serveur.
+    translations = world.translations
+    bubble.click(modifiers=["Shift"])
+    expect(page.locator(BADGE)).to_contain_text("effacez la correction d'abord")
+
+    # Le clic simple masque toujours.
+    bubble.click()
+    expect(bubble).to_have_class(re.compile(r"\bphy-peek\b"))
+
+    # Rechargement : la correction revient du serveur, sans retraduire.
+    page.reload()
+    corrected = page.locator(f"{BUBBLE}[data-corrected]")
+    expect(corrected).to_have_text("Bonjour\nà tous", timeout=15_000)
+    assert world.translations == translations
+
+    # Texte vide : la correction est effacée, la traduction du modèle revient.
+    corrected.click(modifiers=["Control"])
+    page.keyboard.press("Delete")
+    page.keyboard.press("Enter")
+    expect(page.locator(BADGE)).to_contain_text("Correction effacée")
+    expect(bubble_on(page, 66, 0)).to_be_visible()
+    expect(page.locator(f"{BUBBLE}[data-corrected]")).to_have_count(0)

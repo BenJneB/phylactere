@@ -4,7 +4,16 @@ import sqlite3
 import pytest
 
 from phylactere import cache as cache_module
-from phylactere.cache import Cache, GlossaryEntry, TranslatedBlock, TranslationResult
+from phylactere.cache import (
+    Cache,
+    Correction,
+    GlossaryEntry,
+    TranslatedBlock,
+    TranslationResult,
+    apply_corrections,
+    read_corrections,
+    sha1,
+)
 from phylactere.schemas import Box, Bubble, ImageSize, OcrResult
 
 
@@ -294,3 +303,100 @@ def test_stats_counts(cache):
     stats = run(cache.stats())
     assert (stats["ocr"], stats["translations"], stats["glossaries"]) == (0, 1, 1)
     assert stats["max_bytes"] == 0
+
+
+# --- Corrections (jalon 14) ---
+
+URL = "https://image-comic.pstatic.net/webtoon/1/2/0.jpg"
+UNIT = Box(x=0, y=0, w=1, h=1)
+
+
+def correction(text="Corrigé", box=UNIT, original="안녕") -> Correction:
+    return Correction(box=box, original=original, text=text)
+
+
+def put_correction(cache, c: Correction, url=URL, lang="fr") -> None:
+    run(cache.put_correction(url, "s", "66", 0, lang, c, "m", "Salut"))
+
+
+def block(x, y, w, h, original="안녕", translated="Salut") -> TranslatedBlock:
+    return TranslatedBlock(box=Box(x=x, y=y, w=w, h=h), original=original, translated=translated)
+
+
+def test_correction_replaces_the_text_and_keeps_the_model_translation(cache):
+    put_correction(cache, correction())
+    out = run(cache.corrected(URL, "fr", result(("안녕", "Salut"), ("가자", "On y va"))))
+    assert [(b.translated, b.corrected, b.machine) for b in out.blocks] == [
+        ("Corrigé", True, "Salut"),
+        ("On y va", False, None),
+    ]
+    # Autre langue, autre image : rien.
+    assert not run(cache.corrected(URL, "en", result(("안녕", "Hi")))).blocks[0].corrected
+    other = URL.replace("0.jpg", "1.jpg")
+    assert not run(cache.corrected(other, "fr", result(("안녕", "Salut")))).blocks[0].corrected
+
+
+def test_correction_found_after_a_slight_box_shift():
+    c = correction(box=Box(x=100, y=600, w=200, h=30))
+    shifted = [block(104, 598, 198, 32)]
+    assert apply_corrections(shifted, [c])[0].translated == "Corrigé"
+    # Espaces ignorés dans l'original ; un autre original n'est pas la même bulle.
+    assert apply_corrections([block(104, 598, 198, 32, "안 녕")], [c])[0].corrected
+    assert not apply_corrections([block(104, 598, 198, 32, "가자")], [c])[0].corrected
+    # Recouvrement : 50 % suffit, en dessous non.
+    assert apply_corrections([block(100, 615, 200, 30)], [c])[0].corrected
+    assert not apply_corrections([block(100, 616, 200, 30)], [c])[0].corrected
+
+
+def test_correction_applies_to_one_bubble_only():
+    c = correction(box=Box(x=0, y=0, w=10, h=10))
+    out = apply_corrections([block(1, 0, 10, 10), block(0, 1, 10, 10)], [c, c])
+    assert [b.corrected for b in out] == [True, True]  # deux corrections, deux bulles
+    out = apply_corrections([block(1, 0, 10, 10), block(0, 1, 10, 10)], [c])
+    assert [b.corrected for b in out] == [True, False]
+
+
+def test_new_correction_replaces_the_previous_one(cache):
+    put_correction(cache, correction("Un"))
+    put_correction(cache, correction("Deux", box=Box(x=0, y=0, w=1, h=2)))
+    assert run(cache.stats())["corrections"] == 1
+    out = run(cache.corrected(URL, "fr", result(("안녕", "Salut"))))
+    assert out.blocks[0].translated == "Deux"
+
+
+def test_delete_correction_restores_the_model_translation(cache):
+    put_correction(cache, correction())
+    assert run(cache.delete_correction(URL, "fr", Box(x=0, y=0, w=1, h=1), "안녕")) == 1
+    assert run(cache.delete_correction(URL, "fr", Box(x=0, y=0, w=1, h=1), "안녕")) == 0
+    out = run(cache.corrected(URL, "fr", result(("안녕", "Salut"))))
+    assert (out.blocks[0].translated, out.blocks[0].corrected) == ("Salut", False)
+
+
+def test_corrections_survive_clear_and_purge(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache_module, "PURGE_EVERY", 10**9)
+    c = Cache(tmp_path / "cache.sqlite3", max_bytes=300_000)
+    put_correction(c, correction())
+    for i in range(40):
+        put_big(c, i)
+    assert run(c.purge()) > 0
+    run(c.clear())
+    assert run(c.stats())["corrections"] == 1
+    assert run(c.corrected(URL, "fr", result(("안녕", "Salut")))).blocks[0].corrected
+    c.close()
+
+
+def test_context_and_series_bubbles_use_corrections(cache):
+    key = f"{sha1(URL)}:fr:m:P"
+    run(cache.put_translation(key, "s", "66", 0, "fr", "m", result(("안녕", "Salut"))))
+    put_correction(cache, correction())
+    assert run(cache.context("s", "66", 1, "fr", "m", limit=10)) == [("안녕", "Corrigé")]
+    assert run(cache.series_bubbles("s", "fr", "66", 10)) == [("안녕", "Corrigé")]
+
+
+def test_read_corrections_for_the_report_script(cache, tmp_path):
+    assert read_corrections(tmp_path / "absent.sqlite3") == []
+    put_correction(cache, correction())
+    (row,) = read_corrections(tmp_path / "sub" / "cache.sqlite3")
+    assert row["text"] == "Corrigé" and row["translated"] == "Salut" and row["model"] == "m"
+    assert row["box"] == {"x": 0, "y": 0, "w": 1, "h": 1}
+    assert (row["series_id"], row["episode_id"], row["image_index"]) == ("s", "66", 0)

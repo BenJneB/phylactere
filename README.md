@@ -79,14 +79,15 @@ Ouvrir un épisode sur comic.naver.com. Le badge en bas à droite indique la pro
 - **Alt+T** ou clic sur le badge : afficher / masquer toutes les traductions ;
 - clic sur une bulle : la masquer pour voir l'original (re-clic pour la remettre) ; survoler une bulle affiche le texte coréen reconnu et le modèle qui l'a traduite ;
 - **Maj+clic** sur une bulle : la retraduire (pointillé bleu pendant le calcul) ; **Maj+Alt+T** : retraduire toute l'image la plus visible. Le modèle utilisé est celui du popup › **Modèle pour retraduire** (par défaut, le même que pour traduire) ; la nouvelle traduction remplace l'ancienne dans le cache et reste au rechargement de la page. Avec le même modèle, la retraduction peut redonner le même texte : choisir un plus gros modèle pour un vrai second avis ;
+- **Ctrl+clic** sur une bulle : la corriger à la main. Son texte est sélectionné : taper la bonne version, **Maj+Entrée** pour un retour à la ligne, **Entrée** pour valider, **Échap** (ou un clic ailleurs) pour annuler. Une bulle corrigée a un liseré vert à gauche ; elle reste corrigée quel que soit le modèle, après « Vider tout le cache » et au rechargement, et le modèle s'en sert comme contexte pour la suite de l'épisode. Valider un texte vide efface la correction (la traduction du modèle revient). Une bulle corrigée ne se retraduit pas : effacer d'abord la correction. Le rapport de `scripts\reports.py` liste aussi les corrections ;
 - **Alt+clic** sur une bulle mal lue ou mal traduite : la signaler (elle s'entoure d'un pointillé rouge) ; un second Alt+clic annule le signalement. Après un rechargement de la page, l'annulation se fait en supprimant ses deux fichiers (identifiant en bas de sa carte dans le rapport). Le serveur garde la bulle, sa traduction et une découpe de l'image dans `%LOCALAPPDATA%\phylactere\reports\` ; `uv run python ..\scripts\reports.py --open` (depuis `server\`) en fait un rapport HTML. Ces signalements servent à régler le prompt et la lecture des bulles ;
 - en mode « Tout l'épisode », une fois l'épisode traduit et la lecture passée à 80 %, l'épisode suivant est traduit en arrière-plan (badge `épisode suivant 5/81`) : il s'affiche traduit dès son ouverture. Pas de préchargement pour un épisode payant ;
 - popup : langue cible, modèle de traduction, activation de l'extension. Changer la langue ou le modèle retraduit la page (l'OCR, déjà en cache, n'est pas refait) ;
 - popup › **Quand traduire** : « Tout l'épisode dès l'ouverture » (défaut : images à l'écran d'abord, puis le reste en arrière-plan) ou « Au fil de la lecture » (seulement les images à l'écran et les quelques suivantes, 4 par défaut, de 1 à 20). Le second mode évite de traduire tout un épisode qu'on ne fait que survoler ; le badge affiche alors `en attente du défilement` quand la suite sera traduite à l'approche. Le changement s'applique tout de suite, sans recharger la page ;
-- popup › **Vider le cache de cette série** (sur une page Naver) ou **Vider tout le cache** : les traductions seront refaites à la prochaine lecture (recharger la page). Les glossaires sont conservés. Le bouton affiche la taille du cache ;
+- popup › **Vider le cache de cette série** (sur une page Naver) ou **Vider tout le cache** : les traductions seront refaites à la prochaine lecture (recharger la page). Les glossaires et les corrections sont conservés. Le bouton affiche la taille du cache ;
 - popup › **Statistiques** (section repliable) : taille du cache, images servies depuis le lancement du serveur et part venue du cache, temps moyens et maximaux de téléchargement, d'OCR et de traduction, tâches en attente.
 
-Le cache est limité à 500 Mo (`max_mb` de la section `[cache]` de `config.toml`, 0 = sans limite) : au-delà, les images lues le moins récemment sont oubliées (elles seront refaites si on les relit). Les glossaires ne sont jamais oubliés. Au premier lancement de cette version, un cache existant est réécrit une fois pour pouvoir rétrécir : le démarrage peut prendre quelques secondes de plus.
+Le cache est limité à 500 Mo (`max_mb` de la section `[cache]` de `config.toml`, 0 = sans limite) : au-delà, les images lues le moins récemment sont oubliées (elles seront refaites si on les relit). Les glossaires et les corrections ne sont jamais oubliés. Au premier lancement de cette version, un cache existant est réécrit une fois pour pouvoir rétrécir : le démarrage peut prendre quelques secondes de plus.
 
 ## Démarrage automatique (optionnel)
 
@@ -163,7 +164,7 @@ Fichiers, tous dans `%LOCALAPPDATA%\phylactere\` :
 | Emplacement | Contenu |
 |---|---|
 | `config.toml` | réglages personnels et jeton |
-| `Cache\cache.sqlite3` | traductions, résultats de l'OCR, glossaires |
+| `Cache\cache.sqlite3` | traductions, résultats de l'OCR, glossaires, corrections (les supprimer à la main les perd) |
 | `Cache\paddlex\` | modèles de l'OCR |
 | `reports\` | bulles signalées (Alt+clic) : un `.json` et une découpe `.png` par signalement |
 | `Logs\server.log` | journal du serveur (4 fichiers de 2 Mo au plus) |

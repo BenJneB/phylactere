@@ -424,3 +424,95 @@ def test_retranslate_unknown_box_gives_404(client):
 def test_retranslate_requires_token(client):
     del client.headers[TOKEN_HEADER]
     assert client.post("/retranslate", json=request(box=SECOND_BOX)).status_code == 401
+
+
+# --- Corrections (jalon 14) ---
+
+
+def correct(client, text="À la main", box=SECOND_BOX, original="가자", **extra):
+    return client.put(
+        "/correction",
+        json=request(box=box, original=original, text=text, translated="FR:가자", **extra),
+    )
+
+
+def texts(response) -> list[tuple[str, bool]]:
+    return [(b["translated"], b["corrected"]) for b in response.json()["blocks"]]
+
+
+def test_correction_is_applied_whatever_the_model(client, world):
+    client.post("/translate", json=request())
+    response = correct(client)
+    assert response.status_code == 200
+    assert response.json() == {"box": SECOND_BOX, "original": "가자", "text": "À la main"}
+
+    cached = client.post("/translate", json=request())
+    assert cached.json()["cached"] is True
+    assert texts(cached) == [("FR:안녕", False), ("À la main", True)]
+    assert cached.json()["blocks"][1]["machine"] == "FR:가자"
+    # Autre modèle : nouvelle traduction, même correction.
+    other = client.post("/translate", json=request(model="gemma3:4b"))
+    assert other.json()["cached"] is False
+    assert texts(other) == [("FR:안녕", False), ("À la main", True)]
+
+
+def test_correction_survives_clear_cache_and_new_prompt_version(client, world, monkeypatch):
+    client.post("/translate", json=request())
+    correct(client)
+    client.delete("/cache")
+    monkeypatch.setattr(pipeline, "PROMPT_ID", "nouveau-prompt")
+
+    response = client.post("/translate", json=request())
+
+    assert response.json()["cached"] is False and world.detector_calls == 2
+    assert texts(response)[1] == ("À la main", True)
+
+
+def test_correction_found_after_a_slight_box_shift(client, world):
+    shifted = SECOND_BOX | {"x": 103, "y": 602}
+    correct(client, box=shifted)
+    assert texts(client.post("/translate", json=request()))[1] == ("À la main", True)
+
+
+def test_correction_feeds_the_context_of_next_images(client, world):
+    client.post("/translate", json=request(index=0))
+    correct(client)
+    client.post("/translate", json=request(index=1))
+    user = world.ollama_bodies[-1]["messages"][1]["content"]
+    assert "가자 → À la main" in user and "FR:가자" not in user
+
+
+def test_delete_correction_brings_back_the_model_translation(client, world):
+    client.post("/translate", json=request())
+    correct(client)
+    target = request(box=SECOND_BOX, original="가자")
+    response = client.request("DELETE", "/correction", json=target)
+    assert response.json() == {"removed": 1}
+    assert texts(client.post("/translate", json=request()))[1] == ("FR:가자", False)
+    assert client.request("DELETE", "/correction", json=target).json() == {"removed": 0}
+
+
+def test_corrected_bubble_cannot_be_retranslated(client, world):
+    client.post("/translate", json=request())
+    correct(client)
+    response = client.post("/retranslate", json=request(box=SECOND_BOX))
+    assert response.status_code == 409
+    assert "effacez la correction" in response.json()["detail"]
+    assert len(world.ollama_bodies) == 1
+    # L'autre bulle se retraduit, avec la correction dans son contexte.
+    first = {"x": 100, "y": 400, "w": 200, "h": 30}
+    assert client.post("/retranslate", json=request(box=first)).status_code == 200
+    assert "가자 → À la main" in world.ollama_bodies[-1]["messages"][1]["content"]
+
+
+@pytest.mark.parametrize("text", ["", "   "])
+def test_empty_correction_is_refused(client, text):
+    assert correct(client, text=text).status_code == 422
+
+
+def test_correction_refuses_foreign_url_and_missing_token(client):
+    assert correct(client, image_url="https://evil.example/a.jpg").status_code == 400
+    del client.headers[TOKEN_HEADER]
+    assert correct(client).status_code == 401
+    target = request(box=SECOND_BOX, original="가자")
+    assert client.request("DELETE", "/correction", json=target).status_code == 401
