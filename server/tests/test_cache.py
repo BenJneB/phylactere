@@ -281,9 +281,12 @@ def test_old_database_gets_used_column_and_incremental_vacuum(tmp_path):
     db = sqlite3.connect(path)
     assert db.execute("PRAGMA auto_vacuum").fetchone() == (2,)
     used = dict(db.execute("SELECT key, used FROM translation"))
+    urls = dict(db.execute("SELECT key, image_url FROM translation"))
     db.close()
     assert used["old"] > 123.0  # mis à jour par la lecture
     assert used["s661frm"] is not None
+    # Colonne image_url (jalon 17) ajoutée : vide pour les anciennes lignes.
+    assert urls == {"old": None, "s661frm": None}
 
 
 def test_clear_gives_space_back(tmp_path):
@@ -400,3 +403,66 @@ def test_read_corrections_for_the_report_script(cache, tmp_path):
     assert row["text"] == "Corrigé" and row["translated"] == "Salut" and row["model"] == "m"
     assert row["box"] == {"x": 0, "y": 0, "w": 1, "h": 1}
     assert (row["series_id"], row["episode_id"], row["image_index"]) == ("s", "66", 0)
+
+
+# --- Jalon 17 : URL et nombre d'images, règle unique, corrections à la lecture ---
+
+PROMPT = "9-pairs-0"
+
+
+def put_key(cache, url, index, text, model="m", prompt=PROMPT, episode="66"):
+    key = cache_module.translation_key(url, "fr", model, prompt)
+    run(
+        cache.put_translation(
+            key, "s", episode, index, "fr", model, result(("원", text)), image_url=url
+        )
+    )
+    return key
+
+
+def test_get_translation_applies_corrections(cache):
+    key = put_key(cache, URL, 0, "Machine")
+    correction = Correction(box=Box(x=0, y=0, w=1, h=1), original="원", text="Corrigée")
+    run(cache.put_correction(URL, "s", "66", 0, "fr", correction))
+
+    block = run(cache.get_translation(key)).blocks[0]
+
+    assert (block.translated, block.corrected, block.machine) == ("Corrigée", True, "Machine")
+
+
+def test_episode_images_single_rule(cache):
+    other = "https://image-comic.pstatic.net/webtoon/s/66/b.jpg"
+    # Image 0 : modèle demandé (prompt actuel) contre autre modèle plus récent.
+    put_key(cache, URL, 0, "demandé", model="gros")
+    put_key(cache, URL, 0, "autre", model="petit")
+    # Image 1 : modèle demandé avec un ancien prompt contre autre modèle, prompt actuel.
+    put_key(cache, other, 1, "ancien prompt", model="gros", prompt="1-pairs-0")
+    put_key(cache, other, 1, "prompt actuel", model="petit")
+
+    images = run(cache.episode_images("s", "66", "fr", "gros", PROMPT))
+
+    assert {i: (im.model, im.result.blocks[0].translated) for i, im in images.items()} == {
+        0: ("gros", "demandé"),
+        1: ("petit", "prompt actuel"),
+    }
+    assert images[1].image_url == other
+    # Le résumé fait le même choix.
+    assert run(cache.episode_bubbles("s", "66", "fr", "gros", PROMPT)) == [
+        (0, ["demandé"]),
+        (1, ["prompt actuel"]),
+    ]
+
+
+def test_image_count_survives_reopening(tmp_path):
+    path = tmp_path / "cache.sqlite3"
+    c = Cache(path)
+    assert c.image_count("s", "66") is None
+    run(c.put_image_count("s", "66", 81))
+    run(c.put_image_count("s", "66", 81))  # inchangé : rien d'écrit
+    assert c.image_count("s", "66") == 81
+    run(c.clear())  # « Vider le cache » ne l'oublie pas
+    c.close()
+
+    c = Cache(path)
+    assert c.image_count("s", "66") == 81
+    c.close()

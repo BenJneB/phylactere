@@ -5,8 +5,11 @@ n'est calculé : les traductions viennent du cache (corrections comprises), les 
 retéléchargées (même allowlist que le serveur). Une image sans traduction en cache est
 exportée sans bulles.
 
-- Les URL des images sont lues dans la page de l'épisode, comme le fait l'extension : le
-  cache ne garde que leur empreinte, et une image jamais traduite doit figurer aussi.
+- Les URL des images et leur nombre viennent du cache (jalon 17 : l'extension les envoie
+  avec chaque image). La page de l'épisode n'est lue que s'il en manque (image jamais
+  traduite, traduction d'avant le jalon 17, nombre d'images inconnu), avec la même
+  sélection que l'extension.
+- Traduction de chaque image : même règle que le résumé (``Cache.episode_images``).
 - Une page par image, aux dimensions de l'image (1 px = 1 pt). Le JPEG d'origine est
   embarqué tel quel par fpdf2, sans recompression (vérifié : ses octets sont dans le PDF).
 - Bulles comme dans l'extension (content.js) : rectangle arrondi de la couleur ``bg``,
@@ -18,6 +21,7 @@ exportée sans bulles.
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -26,8 +30,9 @@ import httpx
 from fpdf import FPDF
 from PIL import Image
 
-from phylactere.cache import TranslatedBlock, TranslationResult, read_translations
+from phylactere.cache import Cache, EpisodeImage, TranslatedBlock, TranslationResult
 from phylactere.config import FetchConfig, data_dir
+from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError, fetch_bytes
 from phylactere.naver import USER_AGENT, episode_image_urls, episode_page_url
 from phylactere.translate import PROMPT_ID
@@ -46,8 +51,9 @@ DOWNLOADS = 4
 PAGE_TIMEOUT_S = 15
 
 
-class ExportError(Exception):
-    """Export impossible (page de l'épisode illisible, aucune traduction en cache…)."""
+class ExportError(ServiceError):
+    """Export impossible : aucune traduction en cache (404), page de l'épisode ou image
+    illisible (502). Code HTTP renvoyé par POST /export."""
 
 
 def exports_dir() -> Path:
@@ -223,13 +229,19 @@ def build_pdf(pages: list[PageImage], title: str = "") -> bytes:
 # --- Épisode ---
 
 
+# Téléchargement d'une image (allowlist, Referer, taille maximale) : fetch_bytes pour le
+# script, Pipeline.download (images gardées en mémoire) pour le serveur.
+Download = Callable[[str], Awaitable[bytes]]
+
+
 @dataclass
 class ExportReport:
-    path: Path
     images: int
     bubbles: int
     models: set[str]
     missing: list[int]  # index des images exportées sans bulles
+    page_read: bool  # URL des images lues dans la page de Naver (cache incomplet)
+    path: Path | None = None  # fichier écrit (script)
 
     @property
     def translated(self) -> int:
@@ -239,30 +251,103 @@ class ExportReport:
 async def fetch_page(client: httpx.AsyncClient, url: str) -> str:
     """Page de l'épisode, sans cookies (comme le préchargement de l'extension)."""
     try:
-        response = await client.get(url, timeout=PAGE_TIMEOUT_S, follow_redirects=False)
+        response = await client.get(
+            url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=PAGE_TIMEOUT_S,
+            follow_redirects=False,
+        )
     except httpx.HTTPError as exc:
-        raise ExportError(f"Page de l'épisode injoignable : {exc}") from exc
+        raise ExportError(f"Page de l'épisode injoignable : {exc}", 502) from exc
     if response.status_code != 200:
-        raise ExportError(f"Page de l'épisode : Naver a répondu {response.status_code}.")
+        raise ExportError(f"Page de l'épisode : Naver a répondu {response.status_code}.", 502)
     return response.text
 
 
-async def download_all(client: httpx.AsyncClient, urls: list[str], cfg: FetchConfig) -> list[bytes]:
+async def download_all(download: Download, urls: list[str]) -> list[bytes]:
     semaphore = asyncio.Semaphore(DOWNLOADS)
 
     async def one(url: str) -> bytes:
         async with semaphore:
-            return await fetch_bytes(client, url, cfg)
+            return await download(url)
 
     # return_exceptions : toutes les tâches sont finies avant la fermeture du client, même
     # quand l'une échoue.
     results = await asyncio.gather(*(one(url) for url in urls), return_exceptions=True)
     for url, result in zip(urls, results, strict=True):
         if isinstance(result, FetchError):
-            raise ExportError(f"Image impossible à télécharger ({url}) : {result}") from result
+            raise ExportError(f"Image impossible à télécharger ({url}) : {result}", 502) from result
         if isinstance(result, BaseException):
             raise result
     return results
+
+
+async def episode_urls(
+    client: httpx.AsyncClient,
+    series_id: str,
+    episode_id: str,
+    images: dict[int, EpisodeImage],
+    count: int | None,
+) -> tuple[list[str], bool]:
+    """URL des images de l'épisode, dans l'ordre : celles du cache si elles y sont toutes,
+    sinon celles de la page de Naver. Renvoie aussi si la page a été lue."""
+    known = {index: image.image_url for index, image in images.items() if image.image_url}
+    total = max(count or 0, max(images, default=-1) + 1)
+    if total and len(known) == total:
+        return [known[index] for index in range(total)], False
+    page_url = episode_page_url(series_id, episode_id)
+    urls = episode_image_urls(await fetch_page(client, page_url), page_url, series_id, episode_id)
+    if not urls:
+        raise ExportError(f"Aucune image d'épisode trouvée dans {page_url}.", 502)
+    return urls, True
+
+
+async def render_episode(
+    cache: Cache,
+    client: httpx.AsyncClient,
+    download: Download,
+    series_id: str,
+    episode_id: str,
+    target_lang: str,
+    model: str,
+) -> tuple[bytes, ExportReport]:
+    """PDF de l'épisode (octets) et ce qui a été exporté. Commun au script et à
+    POST /export (bouton du popup)."""
+    translations = await cache.episode_images(series_id, episode_id, target_lang, model, PROMPT_ID)
+    if not translations:
+        raise ExportError(
+            f"Aucune traduction en cache ({target_lang}) pour l'épisode {series_id}/"
+            f"{episode_id} : lisez-le d'abord avec Phylactère.",
+            404,
+        )
+    count = cache.image_count(series_id, episode_id)
+    urls, page_read = await episode_urls(client, series_id, episode_id, translations, count)
+    images = await download_all(download, urls)
+
+    pages = []
+    for index, (url, data) in enumerate(zip(urls, images, strict=True)):
+        try:
+            with Image.open(BytesIO(data)) as image:
+                width, height = image.size
+        except OSError as exc:
+            raise ExportError(f"Image illisible : {url}", 502) from exc
+        found = translations.get(index)
+        pages.append(PageImage(data, width, height, found.result if found else None))
+
+    title = f"Épisode {episode_id} ({series_id}) · {target_lang}"
+    pdf = await asyncio.to_thread(build_pdf, pages, title)
+    exported = [translations[i] for i in range(len(urls)) if i in translations]
+    return pdf, ExportReport(
+        images=len(urls),
+        bubbles=sum(len(image.result.blocks) for image in exported),
+        models={image.model for image in exported},
+        missing=[i for i in range(len(urls)) if i not in translations],
+        page_read=page_read,
+    )
+
+
+def pdf_name(series_id: str, episode_id: str, target_lang: str) -> str:
+    return f"{series_id}-{episode_id}-{target_lang}.pdf"
 
 
 async def export_episode(
@@ -275,43 +360,25 @@ async def export_episode(
     out: Path | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ExportReport:
-    """Écrit le PDF de l'épisode et renvoie ce qui a été exporté. ``transport`` : réseau
+    """Script : écrit le PDF de l'épisode dans le dossier des exports (ou ``out``). Le
+    serveur peut tourner : SQLite gère les deux connexions au cache. ``transport`` : réseau
     simulé (tests)."""
-    page_url = episode_page_url(series_id, episode_id)
-    async with httpx.AsyncClient(transport=transport, headers={"User-Agent": USER_AGENT}) as client:
-        html = await fetch_page(client, page_url)
-        urls = episode_image_urls(html, page_url, series_id, episode_id)
-        if not urls:
-            raise ExportError(f"Aucune image d'épisode trouvée dans {page_url}.")
-        translations = await asyncio.to_thread(
-            read_translations, cache_path, urls, target_lang, model, PROMPT_ID
-        )
-        if not translations:
-            raise ExportError(
-                f"Aucune traduction en cache ({target_lang}) pour l'épisode {series_id}/"
-                f"{episode_id} : lisez-le d'abord avec Phylactère."
+    cache = await asyncio.to_thread(Cache, cache_path)
+    try:
+        async with httpx.AsyncClient(transport=transport) as client:
+            pdf, report = await render_episode(
+                cache,
+                client,
+                lambda url: fetch_bytes(client, url, fetch_cfg),
+                series_id,
+                episode_id,
+                target_lang,
+                model,
             )
-        images = await download_all(client, urls, fetch_cfg)
-
-    pages = []
-    for url, data in zip(urls, images, strict=True):
-        try:
-            with Image.open(BytesIO(data)) as image:
-                width, height = image.size
-        except OSError as exc:
-            raise ExportError(f"Image illisible : {url}") from exc
-        found = translations.get(url)
-        pages.append(PageImage(data, width, height, found[1] if found else None))
-
-    title = f"Épisode {episode_id} ({series_id}) · {target_lang}"
-    pdf = await asyncio.to_thread(build_pdf, pages, title)
-    path = out or exports_dir() / f"{series_id}-{episode_id}-{target_lang}.pdf"
+    finally:
+        cache.close()
+    path = out or exports_dir() / pdf_name(series_id, episode_id, target_lang)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(pdf)
-    return ExportReport(
-        path=path,
-        images=len(urls),
-        bubbles=sum(len(p.translation.blocks) for p in pages if p.translation),
-        models={found[0] for found in translations.values()},
-        missing=[i for i, url in enumerate(urls) if url not in translations],
-    )
+    report.path = path
+    return report

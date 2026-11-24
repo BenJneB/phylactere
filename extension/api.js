@@ -29,8 +29,9 @@ function failure(kind, error, extra = {}) {
 //     "error"  échec propre à cette requête (URL refusée, erreur du modèle…)
 //     "timeout" délai dépassé, si l'appelant le demande (`onTimeout`)
 // `onTimeout` : genre d'échec quand le délai est dépassé (un serveur lent n'est pas arrêté).
-// `s` : réglages déjà lus par l'appelant.
-async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, auth = true, onTimeout = "down", s } = {}) {
+// `s` : réglages déjà lus par l'appelant. `binary` : réponse rendue telle quelle
+// ({ ok: true, data: ArrayBuffer, headers }), pour un fichier (export PDF).
+async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, auth = true, onTimeout = "down", binary = false, s } = {}) {
   s ??= await settings();
   if (auth && !s.token) return failure("token", "Jeton manquant : ouvrez le popup de Phylactère.");
   const headers = {};
@@ -52,6 +53,13 @@ async function call(path, { method = "GET", body, timeout = SHORT_TIMEOUT_MS, au
     return failure("down", `Serveur Phylactère injoignable (${s.serverUrl}). Est-il lancé ?`);
   }
 
+  if (binary && response.ok) {
+    try {
+      return { ok: true, data: await response.arrayBuffer(), headers: response.headers };
+    } catch {
+      return failure(onTimeout, "Le serveur ne répond pas (délai dépassé).");
+    }
+  }
   let data = null;
   try {
     data = await response.json();

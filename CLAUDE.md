@@ -81,3 +81,4 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 14 : corriger une bulle à la main
 - [x] Jalon 15 : résumé « Précédemment… »
 - [x] Jalon 16 : export d'un épisode traduit en PDF
+- [x] Jalon 17 : cache (URL et nombre d'images, règle de choix unique, corrections à la lecture) et bouton d'export PDF

@@ -37,6 +37,7 @@
   .actions { display: flex; gap: 8px; margin-top: 16px; }
   button { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--accent); font: inherit;
            font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   .primary { background: var(--accent); color: #fff; }
   .secondary { background: transparent; color: var(--accent); }
   #grant, .wide { width: 100%; margin-top: 8px; }
@@ -119,6 +120,8 @@
     <button id="save" class="primary">Enregistrer</button>
     <button id="clear" class="secondary">Vider tout le cache</button>
   </div>
+  <button id="exportPdf" class="primary wide" hidden disabled>Exporter l’épisode en PDF</button>
+  <div class="hint" id="exportHint" hidden></div>
   <button id="glossary" class="primary wide" hidden>Glossaire de cette série</button>
   <button id="clearSeries" class="secondary wide" hidden>Vider le cache de cette série</button>
   <div id="status"></div>

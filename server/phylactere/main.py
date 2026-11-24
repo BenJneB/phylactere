@@ -32,11 +32,13 @@ from phylactere.cache import Cache, Correction, GlossaryEntry, TranslatedBlock
 from phylactere.config import Settings, load_settings, reports_dir
 from phylactere.debug import render_debug
 from phylactere.errors import ServiceError
+from phylactere.export import pdf_name
 from phylactere.fetch import FetchError, decode_image
 from phylactere.ocr import OcrEngine
 from phylactere.pipeline import (
     CorrectionRequest,
     CorrectionTarget,
+    ExportRequest,
     Pipeline,
     RetranslateRequest,
     Stats,
@@ -52,6 +54,8 @@ from phylactere.schemas import OcrResult
 from phylactere.translate import OllamaTranslator
 
 TOKEN_HEADER = "X-Phylactere-Token"
+# Réponse de POST /export : nombre d'images exportées sans bulles (pas encore traduites).
+MISSING_HEADER = "X-Phylactere-Missing"
 # Origines des extensions : chrome-extension://<id> (Chrome) et moz-extension://<uuid> (Firefox).
 EXTENSION_ORIGIN_REGEX = r"^(chrome|moz)-extension://[a-z0-9-]+$"
 # Refuse les requêtes dont l'en-tête Host n'est pas local (protection contre le DNS rebinding).
@@ -146,6 +150,7 @@ def create_app(
         allow_origin_regex=EXTENSION_ORIGIN_REGEX,
         allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=[TOKEN_HEADER, "Content-Type"],
+        expose_headers=[MISSING_HEADER, "Content-Disposition"],
     )
 
     # Téléchargement, OCR pas prêt, Ollama : un seul endroit pour le code HTTP renvoyé.
@@ -202,6 +207,23 @@ def create_app(
         """Résumé « Précédemment… » d'un épisode, à partir des bulles traduites en cache.
         404 si l'épisode n'a pas été lu avec Phylactère."""
         return await request.app.state.pipeline.summary(body)
+
+    @protected.post("/export", response_class=Response)
+    async def export(request: Request, body: ExportRequest) -> Response:
+        """PDF de l'épisode traduit (bouton « Exporter en PDF » du popup) : traductions du
+        cache, images retéléchargées. 404 si l'épisode n'a aucune traduction en cache."""
+        pdf, report = await request.app.state.pipeline.export(body)
+        name = pdf_name(
+            body.series_id, body.episode_id, body.target_lang or settings.translation.target_lang
+        )
+        return Response(
+            pdf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{name}"',
+                MISSING_HEADER: str(len(report.missing)),
+            },
+        )
 
     @protected.put("/correction")
     async def put_correction(request: Request, body: CorrectionRequest) -> Correction:

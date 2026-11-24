@@ -11,6 +11,8 @@ let savedModel = "";
 let savedRetranslateModel = "";
 let currentSeries = null; // titleId de l'onglet actif, s'il affiche une page Naver
 let currentEpisode = null; // no de l'épisode affiché (page de lecture seulement)
+let currentTabId = null;
+let exporting = false;
 
 // L'URL de l'onglet est lisible grâce à la permission d'hôte sur comic.naver.com.
 async function activeTab() {
@@ -18,7 +20,7 @@ async function activeTab() {
   try {
     const url = new URL(tab?.url || "");
     if (url.hostname !== "comic.naver.com") return {};
-    return { series: url.searchParams.get("titleId"), episode: url.searchParams.get("no") };
+    return { id: tab.id, series: url.searchParams.get("titleId"), episode: url.searchParams.get("no") };
   } catch {
     return {};
   }
@@ -41,6 +43,8 @@ async function init() {
   await checkPermissions();
   await refresh();
   setInterval(refreshHealth, 5000);
+  refreshExport();
+  setInterval(refreshExport, 1000);
 }
 
 // Les boutons propres à la série n'apparaissent que sur une page Naver.
@@ -48,6 +52,7 @@ async function updateSeries() {
   const tab = await activeTab();
   currentSeries = tab.series || null;
   currentEpisode = tab.episode || null;
+  currentTabId = tab.id ?? null;
   $("clearSeries").hidden = !currentSeries;
   $("glossary").hidden = !currentSeries;
 }
@@ -242,6 +247,44 @@ async function clearCache(seriesId) {
 
 $("clear").addEventListener("click", () => clearCache());
 $("clearSeries").addEventListener("click", () => clearCache(currentSeries));
+
+// --- Export PDF (jalon 17) ---
+
+// Bouton visible sur une page d'épisode traduite, grisé tant que la traduction n'est pas
+// finie : l'état vient du content script de l'onglet (compteur du badge).
+async function refreshExport() {
+  const button = $("exportPdf");
+  let st = null;
+  if (currentTabId !== null && currentEpisode) {
+    try {
+      st = await chrome.tabs.sendMessage(currentTabId, { type: "episode-status" });
+    } catch {
+      st = null; // page sans content script (pas encore chargée, extension rechargée)
+    }
+  }
+  button.hidden = !st?.total;
+  $("exportHint").hidden = button.hidden;
+  if (button.hidden || exporting) return;
+  button.disabled = !st.finished;
+  $("exportHint").textContent = st.finished
+    ? (st.done < st.total ? `${st.total - st.done} image(s) en erreur : exportées sans bulles.` : "")
+    : `Traduction en cours : ${st.done}/${st.total} images.`;
+  button.title = button.disabled ? "Disponible quand tout l’épisode est traduit." : "";
+}
+
+$("exportPdf").addEventListener("click", async () => {
+  exporting = true;
+  const button = $("exportPdf");
+  button.disabled = true;
+  button.textContent = "Export en cours…";
+  const res = await send({ type: "export", seriesId: currentSeries, episodeId: currentEpisode });
+  exporting = false;
+  button.textContent = "Exporter l’épisode en PDF";
+  if (!res?.ok) status(res?.error ?? "Export impossible.", "err");
+  else status(`PDF enregistré dans Téléchargements/phylactere/${res.data.filename}` +
+    (res.data.missing ? ` (${res.data.missing} image(s) sans bulles).` : "."));
+  refreshExport();
+});
 
 // Page de glossaire dans un onglet : un popup se ferme dès qu'il perd le focus.
 $("glossary").addEventListener("click", async () => {

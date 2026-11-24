@@ -990,3 +990,47 @@ def test_previously_option_in_popup(browser, server, world):
     popup.locator("#summary").check()
     expect(page.locator(PREVIOUSLY)).to_be_visible(timeout=15_000)
     assert len(world.summary_prompts) == 1  # le résumé vient du cache
+
+
+# --- Jalon 17 : bouton « Exporter en PDF » du popup ---
+
+# Le popup, ouvert ici dans un onglet, prend l'onglet Naver pour l'onglet actif.
+ACTIVE_TAB_IS_NAVER = """
+const query = chrome.tabs.query.bind(chrome.tabs);
+chrome.tabs.query = async (q) =>
+  q.active ? (await query({ url: "https://comic.naver.com/*" })).slice(0, 1) : query(q);
+"""
+
+
+def test_popup_exports_pdf_once_episode_is_translated(browser, server, world):
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=2)
+    page = open_episode(context)
+    expect(page.locator(BUBBLE)).to_have_count(3, timeout=15_000)
+
+    extension_id = worker.url.split("/")[2]
+    popup = context.new_page()
+    popup.add_init_script(ACTIVE_TAB_IS_NAVER)
+    popup.goto(f"chrome-extension://{extension_id}/popup.html")
+    button = popup.locator("#exportPdf")
+
+    # Traduction pas finie (mode défilement) : bouton grisé, avancement affiché.
+    expect(button).to_be_visible()
+    expect(button).to_be_disabled()
+    expect(popup.locator("#exportHint")).to_have_text("Traduction en cours : 3/12 images.")
+
+    # Tout l'épisode traduit : le bouton s'active.
+    set_storage(worker, lookahead=20)
+    expect(button).to_be_enabled(timeout=30_000)
+    expect(popup.locator("#exportHint")).to_have_text("")
+
+    button.click()
+    expect(popup.locator("#status")).to_have_text(
+        "PDF enregistré dans Téléchargements/phylactere/729047-66-fr.pdf.", timeout=15_000
+    )
+    downloads = worker.evaluate("() => chrome.downloads.search({ orderBy: ['-startTime'] })")
+    # Playwright intercepte les téléchargements (fichier renommé) : on vérifie le contenu.
+    assert downloads[0]["mime"] == "application/pdf"
+    assert downloads[0]["state"] == "complete"
+    assert Path(downloads[0]["filename"]).read_bytes().startswith(b"%PDF")

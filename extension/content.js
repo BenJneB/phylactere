@@ -95,6 +95,20 @@
 
   // Glossaire de la série modifié (page de glossaire, via background.js) : le serveur a
   // effacé les traductions de la série, on retraduit l'épisode avec le nouveau glossaire.
+  // État de l'épisode pour le popup (bouton « Exporter en PDF », grisé tant que la
+  // traduction n'est pas finie).
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type !== "episode-status") return false;
+    sendResponse(episode && enabled ? {
+      seriesId: episode.seriesId,
+      episodeId: episode.episodeId,
+      total: order.length,
+      done: order.filter((e) => e.status === "done").length,
+      finished: episodeFinished()
+    } : null);
+    return false;
+  });
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type !== "glossary-changed") return false;
     const mine = !!episode && msg.seriesId === episode.seriesId;
@@ -248,15 +262,17 @@
 
   // Image `i` d'un épisode et ses voisines (`urlAt(j)` : URL de l'image j). Les voisines
   // entrent dans la clé du cache OCR : traduction, préchargement et signalement doivent
-  // envoyer les mêmes.
-  function imageRequest(urlAt, i, episodeId) {
+  // envoyer les mêmes. `count` : nombre d'images de l'épisode, retenu par le serveur
+  // (épisode lu en partie pour le résumé, export PDF sans relire la page de Naver).
+  function imageRequest(urlAt, i, episodeId, count) {
     return {
       image_url: urlAt(i),
       series_id: episode.seriesId,
       episode_id: episodeId,
       index: i,
       prev_image_url: urlAt(i - 1),
-      next_image_url: urlAt(i + 1)
+      next_image_url: urlAt(i + 1),
+      image_count: count
     };
   }
 
@@ -272,7 +288,7 @@
       e.status = "working";
     }
     if (priority === "visible") e.sentVisible = true;
-    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId), priority };
+    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId, order.length), priority };
     const res = await ask({ type: "translate", request });
     if (gen !== generation) return; // page remise à zéro entre-temps
     if (counted) inFlight--;
@@ -473,7 +489,7 @@
   async function sendUpcomingImage(up, i) {
     const gen = generation;
     inFlight++;
-    const request = { ...imageRequest((j) => up.urls[j], i, up.episodeId), priority: "prefetch" };
+    const request = { ...imageRequest((j) => up.urls[j], i, up.episodeId, up.urls.length), priority: "prefetch" };
     const res = await ask({ type: "translate", request });
     if (gen !== generation) return;
     inFlight--;
@@ -519,17 +535,9 @@
       previouslyState = null;
       return;
     }
-    // Nombre d'images de l'épisode précédent : le serveur en déduit s'il a été lu en entier.
-    let imageCount;
-    try {
-      imageCount = (await episodeImageUrls(episodeId)).length || undefined;
-    } catch (err) {
-      console.info("[Phylactère] Images de l'épisode précédent illisibles :", err?.message || err);
-    }
-    if (gen !== generation) return;
-    const request = {
-      series_id: episode.seriesId, episode_id: episodeId, image_count: imageCount, priority: "prefetch"
-    };
+    // Le serveur connaît le nombre d'images de l'épisode précédent (envoyé avec ses images) :
+    // il en déduit s'il a été lu en entier.
+    const request = { series_id: episode.seriesId, episode_id: episodeId, priority: "prefetch" };
     let res;
     // Délai dépassé : le serveur continue, une nouvelle demande rejoint sa tâche.
     for (let attempt = 0; attempt <= MAX_TIMEOUT_RETRIES; attempt++) {
@@ -593,8 +601,7 @@
     if (!episodeFinished() || readingProgress() < NEXT_EPISODE_PROGRESS) return;
     summaryRequested = true;
     const request = {
-      series_id: episode.seriesId, episode_id: episode.episodeId, image_count: order.length,
-      priority: "background"
+      series_id: episode.seriesId, episode_id: episode.episodeId, priority: "background"
     };
     ask({ type: "summary", request }).then((res) => {
       if (!res.ok && res.kind !== "timeout") {
@@ -618,7 +625,7 @@
   async function report(e, b, el) {
     el.dataset.report = "sending";
     const request = {
-      ...imageRequest(orderUrl, e.index, episode.episodeId),
+      ...imageRequest(orderUrl, e.index, episode.episodeId, order.length),
       box: b.box,
       original: b.original,
       translated: b.translated
@@ -669,7 +676,7 @@
       return showNotice("Bulle corrigée : effacez la correction d'abord", "error");
     }
     el.dataset.retranslate = "sending";
-    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId), box: e.blocks[i].box };
+    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId, order.length), box: e.blocks[i].box };
     const res = await ask({ type: "retranslate", request });
     if (!el.isConnected) return; // page remise à zéro ou image retraduite entre-temps
     delete el.dataset.retranslate;
@@ -708,7 +715,7 @@
     const gen = generation;
     e.retranslating = true;
     e.layer.classList.add("phy-retranslating");
-    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId), priority: "visible", force: true };
+    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId, order.length), priority: "visible", force: true };
     const res = await ask({ type: "translate", request });
     if (gen !== generation) return;
     e.retranslating = false;
@@ -781,7 +788,7 @@
     if (!b.corrected && !text) return;
     el.dataset.correct = "sending";
     const request = {
-      ...imageRequest(orderUrl, e.index, episode.episodeId),
+      ...imageRequest(orderUrl, e.index, episode.episodeId, order.length),
       box: b.box,
       original: b.original,
       text,

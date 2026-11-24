@@ -3,15 +3,19 @@
 - OCR : clé = empreinte de l'URL, des voisines et des réglages OCR ; on peut changer de
   modèle de traduction ou de langue sans refaire l'OCR.
 - Traductions : clé = sha1(image_url) + langue + modèle + PROMPT_VERSION. Chaque ligne
-  garde la série, l'épisode et l'index pour fournir le contexte (bulles précédentes).
+  garde la série, l'épisode, l'index et l'URL de l'image (jalon 17 ; NULL avant) : contexte
+  (bulles précédentes), résumé et export PDF.
+- Épisodes (jalon 17) : nombre d'images de chaque épisode, envoyé par l'extension avec
+  chaque image (épisode lu en partie, export sans relire la page de Naver).
 - Glossaires : une liste d'entrées par série. Le modifier efface seulement les traductions
   des images qui mentionnent un terme ajouté, retiré ou modifié.
 - Taille bornée (jalon 12) : au-delà de ``max_bytes``, les entrées OCR et traductions les
   moins récemment utilisées (colonne ``used``) sont supprimées ; jamais les glossaires.
 - Corrections (jalon 14) : texte saisi à la main pour une bulle, par image (sha1 de l'URL)
-  et langue cible, indépendant du modèle et de PROMPT_VERSION. Appliquées à la lecture
-  (réponse de /translate, contexte, propositions de glossaire) : les traductions en cache
-  restent celles du modèle. Ni ``clear`` ni la purge n'y touchent.
+  et langue cible, indépendant du modèle et de PROMPT_VERSION. Appliquées par toutes les
+  lectures de traductions (``get_translation``, contexte, propositions de glossaire,
+  résumé, export) : les traductions en cache restent celles du modèle. Ni ``clear`` ni la
+  purge n'y touchent.
 - Résumés (jalon 15) : un résumé par épisode, langue cible et modèle, avec l'empreinte des
   bulles résumées (``source``) pour savoir s'il est à refaire. Ni ``clear`` ni la purge n'y
   touchent : quelques centaines d'octets par épisode, et le résumé reste servi quand les
@@ -94,6 +98,12 @@ CREATE TABLE IF NOT EXISTS summary (
     bubbles INTEGER NOT NULL,
     created REAL NOT NULL,
     PRIMARY KEY (series_id, episode_id, target_lang, model)
+);
+CREATE TABLE IF NOT EXISTS episode (
+    series_id TEXT NOT NULL,
+    episode_id TEXT NOT NULL,
+    image_count INTEGER NOT NULL,
+    PRIMARY KEY (series_id, episode_id)
 );
 """
 
@@ -237,9 +247,18 @@ def apply_corrections(
 EpisodeImages = list[tuple[int, list[str]]]
 
 
+class EpisodeImage(BaseModel):
+    """Traduction en cache d'une image d'un épisode, corrections appliquées (jalon 17)."""
+
+    model: str
+    # URL de l'image ; None pour une traduction mise en cache avant le jalon 17.
+    image_url: str | None
+    result: TranslationResult
+
+
 def translation_key(image_url: str, target_lang: str, model: str, prompt_id: str) -> str:
     """Clé d'une traduction en cache : ``<sha1 de l'URL>:<langue>:<modèle>:<prompt>``.
-    Seul endroit qui fixe ce format (voir image_hash et read_translations)."""
+    Seul endroit qui fixe ce format (voir image_hash et prompt_rank)."""
     return f"{sha1(image_url)}:{target_lang}:{model}:{prompt_id}"
 
 
@@ -294,55 +313,12 @@ def read_corrections(path: Path) -> list[dict]:
     return rows
 
 
-def read_translations(
-    path: Path, image_urls: list[str], target_lang: str, model: str, prompt_id: str
-) -> dict[str, tuple[str, TranslationResult]]:
-    """Traductions en cache des images ``image_urls`` (export PDF, jalon 16), corrections
-    appliquées : URL → (modèle, traduction). Pour chaque image : celle de ``model`` avec le
-    prompt actuel (``prompt_id``), sinon celle d'un autre modèle avec le prompt actuel (la
-    plus récente), sinon une traduction d'un ancien prompt, ``model`` d'abord. Image
-    absente du résultat si elle n'a pas de traduction lisible dans ``target_lang``.
-
-    Base ouverte en lecture seule : le serveur peut tourner. Pas de base : dict vide."""
-    found: dict[str, tuple[str, TranslationResult]] = {}
-    with open_readonly(path) as db:
-        if db is None:
-            return found
-        for url in image_urls:
-            image = sha1(url)
-            # Clés « <sha1>:… » (translation_key) : intervalle sur la clé primaire (« ; »
-            # suit « : »), puis le prompt actuel d'abord.
-            row = db.execute(
-                "SELECT model, result FROM translation"
-                " WHERE key >= ? AND key < ? AND target_lang = ?"
-                " ORDER BY substr(key, -?) = ? DESC, model = ? DESC, created DESC, rowid DESC"
-                " LIMIT 1",
-                (
-                    f"{image}:",
-                    f"{image};",
-                    target_lang,
-                    len(prompt_id) + 1,
-                    f":{prompt_id}",
-                    model,
-                ),
-            ).fetchone()
-            if row is None:
-                continue
-            try:
-                result = TranslationResult.model_validate_json(row[1])
-            except ValidationError:
-                logger.warning("Traduction illisible dans le cache, ignorée : %s", url)
-                continue
-            try:
-                corrections = load_corrections(db, image, target_lang)
-            except sqlite3.OperationalError:  # base d'avant le jalon 14
-                corrections = []
-            except ValidationError:
-                logger.warning("Correction illisible dans le cache, ignorée : %s", url)
-                corrections = []
-            blocks = apply_corrections(result.blocks, corrections)
-            found[url] = (row[0], result.model_copy(update={"blocks": blocks}))
-    return found
+def prompt_rank(key: str, model: str, wanted_model: str, prompt_id: str) -> tuple[bool, bool]:
+    """Règle unique de choix entre plusieurs traductions d'une même image (résumé, export) :
+    le prompt actuel d'abord, puis le modèle demandé ; à égalité, la plus récente (à
+    départager par l'appelant). Le prompt actuel passe avant le modèle : une traduction
+    d'un ancien prompt a été invalidée par le changement de PROMPT_VERSION."""
+    return key.endswith(f":{prompt_id}"), model == wanted_model
 
 
 def _threaded(func):
@@ -375,7 +351,14 @@ class Cache:
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
             self._add_used_columns()
+            self._add_column("translation", "image_url", "TEXT")
             self._db.commit()
+            # Nombre d'images des épisodes, gardé en mémoire : /translate l'envoie avec
+            # chaque image, il n'est écrit que s'il change.
+            self._image_counts: dict[tuple[str, str], int] = {
+                (series, episode): count
+                for series, episode, count in self._db.execute("SELECT * FROM episode")
+            }
         # Version du glossaire de chaque série, incrémentée à chaque enregistrement : une
         # traduction commencée avec l'ancien glossaire n'est pas mise en cache (voir
         # put_translation).
@@ -400,13 +383,19 @@ class Cache:
             logger.info("Conversion du cache pour pouvoir le réduire (une seule fois)…")
             self._db.execute("VACUUM")
 
+    def _add_column(self, table: str, column: str, kind: str) -> bool:
+        """Ajoute une colonne absente d'une base plus ancienne ; True si elle a été ajoutée."""
+        columns = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
+        if column in columns:
+            return False
+        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        return True
+
     def _add_used_columns(self) -> None:
         """Colonne ``used`` (dernière utilisation), absente des bases d'avant le jalon 12 :
         on y reprend la date de création."""
         for table in PURGEABLE:
-            columns = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
-            if "used" not in columns:
-                self._db.execute(f"ALTER TABLE {table} ADD COLUMN used REAL")
+            if self._add_column(table, "used", "REAL"):
                 self._db.execute(f"UPDATE {table} SET used = created")
 
     def _size(self, live: bool = False) -> int:
@@ -509,11 +498,15 @@ class Cache:
 
     @_threaded
     def get_translation(self, key: str) -> TranslationResult | None:
-        row = self._db.execute("SELECT result FROM translation WHERE key = ?", (key,)).fetchone()
+        """Traduction en cache, corrections appliquées (``corrected``, ``machine``)."""
+        row = self._db.execute(
+            "SELECT target_lang, result FROM translation WHERE key = ?", (key,)
+        ).fetchone()
         if row is None:
             return None
         self._touch("translation", key)
-        return TranslationResult.model_validate_json(row[0])
+        target_lang, raw = row
+        return self._with_corrections(key, target_lang, TranslationResult.model_validate_json(raw))
 
     @_threaded
     def replace_block(self, key: str, block: TranslatedBlock) -> bool:
@@ -552,6 +545,7 @@ class Cache:
         model: str,
         result: TranslationResult,
         glossary_version: int | None = None,
+        image_url: str | None = None,
     ) -> None:
         """``glossary_version`` : version du glossaire lue avant la traduction. S'il a été
         enregistré depuis, la traduction n'est pas mise en cache : put_glossary a déjà
@@ -560,9 +554,9 @@ class Cache:
             return
         now = time.time()
         self._db.execute(
-            "INSERT OR REPLACE INTO translation"
-            " (key, series_id, episode_id, image_index, target_lang, model, result, created, used)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO translation (key, series_id, episode_id, image_index,"
+            " target_lang, model, result, created, used, image_url)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 key,
                 series_id,
@@ -573,6 +567,7 @@ class Cache:
                 result.model_dump_json(),
                 now,
                 now,
+                image_url,
             ),
         )
         self._db.commit()
@@ -641,42 +636,67 @@ class Cache:
                     return pairs
         return pairs
 
+    def _episode_images(
+        self, series_id: str, episode_id: str, target_lang: str, model: str, prompt_id: str
+    ) -> dict[int, EpisodeImage]:
+        """Traduction de chaque image de l'épisode en cache, corrections appliquées : index →
+        EpisodeImage. Plusieurs traductions d'une image (modèles, versions du prompt) : la
+        règle unique de ``prompt_rank``, puis la plus récente."""
+        rows = self._db.execute(
+            "SELECT image_index, model, image_url, key, result FROM translation"
+            " WHERE series_id = ? AND episode_id = ? AND target_lang = ?"
+            " ORDER BY created DESC, rowid DESC",
+            (series_id, episode_id, target_lang),
+        )
+        best: dict[int, tuple[tuple[bool, bool], tuple]] = {}
+        for row in rows:
+            index, row_model, _, key, _ = row
+            rank = prompt_rank(key, row_model, model, prompt_id)
+            # Plus récentes d'abord : à rang égal, la première vue reste.
+            if index not in best or rank > best[index][0]:
+                best[index] = (rank, row)
+        images: dict[int, EpisodeImage] = {}
+        for index in sorted(best):
+            _, (_, row_model, image_url, key, raw) = best[index]
+            try:
+                result = TranslationResult.model_validate_json(raw)
+            except ValidationError:
+                logger.warning("Traduction illisible dans le cache, ignorée : %s", key)
+                continue
+            result = self._with_corrections(key, target_lang, result)
+            images[index] = EpisodeImage(model=row_model, image_url=image_url, result=result)
+        return images
+
+    episode_images = _threaded(_episode_images)
+
     @_threaded
     def episode_bubbles(
-        self, series_id: str, episode_id: str, target_lang: str, model: str
+        self, series_id: str, episode_id: str, target_lang: str, model: str, prompt_id: str
     ) -> EpisodeImages:
-        """Traductions des bulles de l'épisode en cache, corrections appliquées : une entrée
-        par image traduite, (index, textes dans l'ordre de lecture), par index croissant.
+        """Traductions des bulles de l'épisode en cache (résumé) : (index, textes dans
+        l'ordre de lecture) par index croissant ; même choix que l'export (episode_images)."""
+        images = self._episode_images(series_id, episode_id, target_lang, model, prompt_id)
+        return [
+            (index, [block.translated for block in image.result.blocks])
+            for index, image in images.items()
+        ]
 
-        Celles de ``model`` ; à défaut (épisode lu avec un autre modèle), celles du modèle
-        qui a traduit le plus d'images de l'épisode, le plus récent en cas d'égalité."""
-        rows = self._db.execute(
-            "SELECT model, image_index, created, key, result FROM translation"
-            " WHERE series_id = ? AND episode_id = ? AND target_lang = ?"
-            " ORDER BY image_index, created DESC, rowid DESC",
-            (series_id, episode_id, target_lang),
-        ).fetchall()
-        if not rows:
-            return []
-        by_model: dict[str, list[tuple]] = {}
-        for row in rows:
-            by_model.setdefault(row[0], []).append(row)
-        if model not in by_model:
-            model = max(
-                by_model,
-                key=lambda m: (
-                    len({row[1] for row in by_model[m]}),
-                    max(row[2] for row in by_model[m]),
-                ),
-            )
-        images: EpisodeImages = []
-        for _, index, _, key, raw in by_model[model]:
-            # Une image traduite avec plusieurs versions du prompt : la plus récente seule.
-            if images and images[-1][0] == index:
-                continue
-            blocks = self._corrected_blocks(key, target_lang, raw)
-            images.append((index, [block.translated for block in blocks]))
-        return images
+    # --- Épisodes (jalon 17) ---
+
+    def image_count(self, series_id: str, episode_id: str) -> int | None:
+        """Nombre d'images de l'épisode, s'il est connu."""
+        return self._image_counts.get((series_id, episode_id))
+
+    @_threaded
+    def put_image_count(self, series_id: str, episode_id: str, count: int) -> None:
+        """Retient le nombre d'images de l'épisode (seulement s'il change)."""
+        if self._image_counts.get((series_id, episode_id)) == count:
+            return
+        self._db.execute(
+            "INSERT OR REPLACE INTO episode VALUES (?, ?, ?)", (series_id, episode_id, count)
+        )
+        self._db.commit()
+        self._image_counts[(series_id, episode_id)] = count
 
     # --- Résumés (jalon 15) ---
 
@@ -719,10 +739,17 @@ class Cache:
     def _corrections(self, image: str, target_lang: str) -> list[Correction]:
         return load_corrections(self._db, image, target_lang)
 
+    def _with_corrections(
+        self, key: str, target_lang: str, result: TranslationResult
+    ) -> TranslationResult:
+        """Traduction de la clé ``key``, corrections de son image appliquées."""
+        corrections = self._corrections(image_hash(key), target_lang)
+        return result.model_copy(update={"blocks": apply_corrections(result.blocks, corrections)})
+
     def _corrected_blocks(self, key: str, target_lang: str, raw: str) -> list[TranslatedBlock]:
         """Bulles d'une traduction en cache (``raw``), corrections appliquées."""
-        blocks = TranslationResult.model_validate_json(raw).blocks
-        return apply_corrections(blocks, self._corrections(image_hash(key), target_lang))
+        result = TranslationResult.model_validate_json(raw)
+        return self._with_corrections(key, target_lang, result).blocks
 
     @_threaded
     def corrected(
