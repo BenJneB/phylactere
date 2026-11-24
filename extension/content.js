@@ -22,7 +22,10 @@
   // et la lecture passée à 80 % de ses images.
   const NEXT_EPISODE_PROGRESS = 0.8;
   const NOTICE_MS = 4000; // durée d'un message temporaire du badge
-  const HINT = "Clic ou Alt+T : afficher / masquer les traductions\nAlt+clic sur une bulle : la signaler (ou annuler)";
+  const HINT = "Clic ou Alt+T : afficher / masquer les traductions\n" +
+    "Maj+clic sur une bulle : la retraduire\n" +
+    "Maj+Alt+T : retraduire l'image la plus visible\n" +
+    "Alt+clic sur une bulle : la signaler (ou annuler)";
 
   const entries = new Map(); // url -> entrée (voir track())
   let order = []; // entrées dans l'ordre de l'épisode
@@ -86,7 +89,8 @@
   document.addEventListener("keydown", (e) => {
     if (e.altKey && e.code === "KeyT" && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
       e.preventDefault();
-      toggleHidden();
+      if (e.shiftKey) retranslateImage();
+      else toggleHidden();
     }
   });
 
@@ -497,7 +501,77 @@
     updateBadge();
   }
 
+  // --- Retraduction (jalon 13) ---
+
+  // Maj+clic : le serveur retraduit la bulle seule (avec le modèle « pour retraduire » du
+  // popup) et la remplace dans son cache, sous la clé du modèle affiché : la nouvelle
+  // traduction reste au rechargement de la page.
+  async function retranslateBubble(e, i, el) {
+    if (el.dataset.retranslate) return; // déjà en cours
+    el.dataset.retranslate = "sending";
+    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId), box: e.blocks[i].box };
+    const res = await ask({ type: "retranslate", request });
+    if (!el.isConnected) return; // page remise à zéro ou image retraduite entre-temps
+    delete el.dataset.retranslate;
+    if (!res.ok) {
+      console.warn("[Phylactère] Retraduction impossible :", res.error);
+      showNotice("Retraduction impossible : " + res.error, "error");
+      return;
+    }
+    e.blocks[i] = res.data;
+    fillBubble(el, res.data);
+    fitText(e);
+    showNotice("Bulle retraduite" + (res.data.model ? ` (${res.data.model})` : ""), "");
+  }
+
+  // Image dont la plus grande hauteur est à l'écran.
+  function mostVisibleEntry() {
+    let best = null, bestHeight = 0;
+    for (const e of order) {
+      if (!e.visible || !e.img.isConnected) continue;
+      const r = e.img.getBoundingClientRect();
+      const height = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
+      if (height > bestHeight) { best = e; bestHeight = height; }
+    }
+    return best;
+  }
+
+  // Maj+Alt+T : toute l'image la plus visible est retraduite (`force` : le serveur ignore
+  // sa traduction en cache puis la remplace ; l'OCR en cache est réutilisé). Requête hors
+  // quota, comme un renvoi « visible » : l'utilisateur attend.
+  async function retranslateImage() {
+    const e = mostVisibleEntry();
+    if (!e) return;
+    if (e.status !== "done" || !e.layer) return showNotice("Image pas encore traduite", "error");
+    if (!e.blocks.length) return showNotice("Aucune bulle sur cette image", "");
+    if (e.retranslating) return;
+    const gen = generation;
+    e.retranslating = true;
+    e.layer.classList.add("phy-retranslating");
+    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId), priority: "visible", force: true };
+    const res = await ask({ type: "translate", request });
+    if (gen !== generation) return;
+    e.retranslating = false;
+    e.layer?.classList.remove("phy-retranslating");
+    if (!res.ok) {
+      console.warn("[Phylactère] Retraduction impossible :", res.error);
+      showNotice("Retraduction impossible : " + res.error, "error");
+      return;
+    }
+    e.blocks = res.data.blocks;
+    e.imageSize = res.data.image_size;
+    render(e);
+    const model = res.data.blocks[0]?.model;
+    showNotice("Image retraduite" + (model ? ` (${model})` : ""), "");
+  }
+
   // --- Rendu des bulles ---
+
+  // Texte et infobulle (original, et modèle qui a traduit s'il est connu).
+  function fillBubble(el, b) {
+    el.textContent = b.translated;
+    el.title = b.model ? `${b.original}\n— ${b.model}` : b.original;
+  }
 
   function render(e) {
     e.layer?.remove();
@@ -505,7 +579,7 @@
     const layer = document.createElement("div");
     layer.className = "phy-layer" + (hidden ? " phy-hidden" : "");
 
-    for (const b of e.blocks) {
+    e.blocks.forEach((b, i) => {
       // Une bulle coupée entre deux images peut déborder en bas (y + h > hauteur).
       const x = Math.max(0, b.box.x - PAD);
       const y = Math.max(0, b.box.y - PAD);
@@ -514,8 +588,7 @@
       const el = document.createElement("div");
       el.className = "phy-bubble";
       el.lang = targetLang;
-      el.textContent = b.translated;
-      el.title = b.original;
+      fillBubble(el, b);
       el.dataset.h = h;
       el.style.left = (x / nw) * 100 + "%";
       el.style.top = (y / nh) * 100 + "%";
@@ -531,17 +604,22 @@
       }
       // Clic : masque la bulle pour voir l'original (re-clic pour la remettre).
       // Alt+clic : signale la bulle (mauvaise lecture ou mauvaise traduction).
+      // Maj+clic : la retraduit. `e.blocks[i]` plutôt que `b` : la bulle a pu être
+      // retraduite depuis.
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         if (ev.altKey) {
           ev.preventDefault();
-          toggleReport(e, b, el);
+          toggleReport(e, e.blocks[i], el);
+        } else if (ev.shiftKey) {
+          ev.preventDefault();
+          retranslateBubble(e, i, el);
         } else {
           el.classList.toggle("phy-peek");
         }
       });
       layer.appendChild(el);
-    }
+    });
     document.body.appendChild(layer);
     e.layer = layer;
     e.lastW = undefined;

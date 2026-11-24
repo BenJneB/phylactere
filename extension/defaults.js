@@ -7,6 +7,8 @@ const DEFAULTS = {
   token: "",
   targetLang: "fr",
   model: "", // vide = modèle de la configuration du serveur
+  // Modèle pour retraduire une bulle ou une image (jalon 13) ; vide = `model`.
+  retranslateModel: "",
   enabled: true,
   // "episode" : tout l'épisode part dès l'ouverture (images visibles d'abord) ;
   // "scroll" : seulement les images visibles et les `lookahead` suivantes.
@@ -15,7 +17,7 @@ const DEFAULTS = {
 };
 
 // Réglages appliqués à chaud par content.js, sans retraduire la page.
-const LIVE_SETTINGS = ["translateMode", "lookahead"];
+const LIVE_SETTINGS = ["translateMode", "lookahead", "retranslateModel"];
 
 // Réglages enregistrés, complétés par les valeurs par défaut.
 function settings() {

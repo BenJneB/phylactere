@@ -42,6 +42,16 @@ class Box(BaseModel):
         return Box(x=x, y=y, w=max(b.right for b in boxes) - x, h=max(b.bottom for b in boxes) - y)
 
 
+def match_box(boxes: list[Box], box: Box) -> int | None:
+    """Indice de la boîte qui correspond à ``box`` (bulle affichée par l'extension) : même
+    boîte, sinon le plus grand recouvrement non nul ; None si aucune ne la recouvre."""
+    for i, candidate in enumerate(boxes):
+        if candidate == box:
+            return i
+    best = max(range(len(boxes)), key=lambda i: boxes[i].intersection_area(box), default=None)
+    return best if best is not None and boxes[best].intersection_area(box) > 0 else None
+
+
 class Line(BaseModel):
     """Une ligne de texte reconnue par l'OCR."""
 

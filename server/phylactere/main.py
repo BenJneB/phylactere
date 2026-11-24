@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from phylactere import __version__
-from phylactere.cache import Cache, GlossaryEntry
+from phylactere.cache import Cache, GlossaryEntry, TranslatedBlock
 from phylactere.config import Settings, load_settings, reports_dir
 from phylactere.debug import render_debug
 from phylactere.errors import ServiceError
@@ -36,6 +36,7 @@ from phylactere.fetch import FetchError, decode_image
 from phylactere.ocr import OcrEngine
 from phylactere.pipeline import (
     Pipeline,
+    RetranslateRequest,
     Stats,
     SuggestRequest,
     SuggestResponse,
@@ -186,6 +187,11 @@ def create_app(
     async def translate(request: Request, body: TranslateRequest) -> TranslateResponse:
         """OCR et traduction des bulles d'une image de l'épisode."""
         return await request.app.state.pipeline.translate(body)
+
+    @protected.post("/retranslate")
+    async def retranslate(request: Request, body: RetranslateRequest) -> TranslatedBlock:
+        """Retraduit une bulle (Maj+clic dans l'extension) et la remplace dans le cache."""
+        return await request.app.state.pipeline.retranslate(body)
 
     @protected.post("/report")
     async def report(request: Request, body: ReportRequest) -> ReportResponse:

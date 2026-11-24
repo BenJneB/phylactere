@@ -11,6 +11,7 @@ if (typeof importScripts === "function") importScripts("defaults.js", "api.js");
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const handlers = {
     translate: () => translate(msg.request),
+    retranslate: () => retranslate(msg.request),
     report: () => report(msg.request),
     "report-cancel": () => call(`/report/${encodeURIComponent(msg.id)}`, { method: "DELETE" }),
     health: () => health(),
@@ -28,7 +29,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function translate(request) {
   const s = await settings();
-  const body = withLangModel(request, s);
+  // Maj+Alt+T : retraduction forcée de l'image, avec le modèle choisi pour retraduire.
+  const body = request.force ? withRetranslateModel(request, s) : withLangModel(request, s);
   // Délai dépassé : le serveur est lent (CPU chargé), pas arrêté ; content.js remet l'image
   // en file, et la nouvelle demande est fusionnée avec la tâche en cours ou servie par le cache.
   return call("/translate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "timeout", s });
@@ -40,6 +42,13 @@ async function report(request) {
   const s = await settings();
   const body = withLangModel(request, s);
   return call("/report", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
+}
+
+// Maj+clic sur une bulle : le serveur la retraduit seule et la remplace dans son cache.
+async function retranslate(request) {
+  const s = await settings();
+  const body = withRetranslateModel(request, s);
+  return call("/retranslate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
 }
 
 function health() {
