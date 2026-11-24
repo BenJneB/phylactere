@@ -9,6 +9,7 @@ regroupement.
 """
 
 import json
+import re
 import secrets
 import time
 from pathlib import Path
@@ -21,6 +22,9 @@ from phylactere.schemas import Box, Bubble, OcrResult
 # Marge autour de la bulle dans la découpe (px de l'image d'origine) : un peu de dessin
 # autour aide à juger le regroupement et la lecture.
 CROP_MARGIN = 24
+# Identifiant d'un signalement (voir write_report) : contrôlé avant toute suppression, pour
+# ne jamais toucher un fichier hors du dossier des signalements.
+REPORT_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 
 
 class ReportRequest(BaseModel):
@@ -120,3 +124,17 @@ def write_report(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return report_id
+
+
+def delete_report(directory: Path, report_id: str) -> bool:
+    """Supprime ``<id>.json`` et ``<id>.png`` ; False si l'identifiant est invalide ou si
+    le signalement n'existe pas."""
+    if not REPORT_ID.fullmatch(report_id):
+        return False
+    found = False
+    for suffix in (".json", ".png"):
+        path = directory / f"{report_id}{suffix}"
+        if path.is_file():
+            path.unlink()
+            found = True
+    return found

@@ -22,7 +22,7 @@
   // et la lecture passée à 80 % de ses images.
   const NEXT_EPISODE_PROGRESS = 0.8;
   const NOTICE_MS = 4000; // durée d'un message temporaire du badge
-  const HINT = "Clic ou Alt+T : afficher / masquer les traductions\nAlt+clic sur une bulle : la signaler";
+  const HINT = "Clic ou Alt+T : afficher / masquer les traductions\nAlt+clic sur une bulle : la signaler (ou annuler)";
 
   const entries = new Map(); // url -> entrée (voir track())
   let order = []; // entrées dans l'ordre de l'épisode
@@ -422,8 +422,15 @@
 
   // Le serveur enregistre la bulle, ses lignes OCR et une découpe de l'image, pour
   // constituer un corpus d'échecs (scripts/reports.py en fait un rapport HTML).
+  // Un second Alt+clic annule le signalement (tant que la page n'a pas été rechargée :
+  // l'identifiant n'est gardé que sur la bulle affichée).
+  function toggleReport(e, b, el) {
+    if (el.dataset.report === "sending") return; // envoi ou annulation en cours
+    if (el.dataset.report === "done") cancelReport(el);
+    else report(e, b, el);
+  }
+
   async function report(e, b, el) {
-    if (el.dataset.report) return; // déjà signalée, ou envoi en cours
     el.dataset.report = "sending";
     const request = {
       image_url: e.url,
@@ -445,11 +452,32 @@
     if (!el.isConnected) return; // page remise à zéro entre-temps
     if (res?.ok) {
       el.dataset.report = "done";
-      showNotice("Bulle signalée", "");
+      el.dataset.reportId = res.data.id;
+      showNotice("Bulle signalée (Alt+clic pour annuler)", "");
     } else {
       delete el.dataset.report;
       console.warn("[Phylactère] Signalement impossible :", res?.error);
       showNotice("Signalement impossible : " + (res?.error || "réponse vide"), "error");
+    }
+  }
+
+  async function cancelReport(el) {
+    el.dataset.report = "sending";
+    let res;
+    try {
+      res = await chrome.runtime.sendMessage({ type: "report-cancel", id: el.dataset.reportId });
+    } catch (err) {
+      res = { ok: false, error: "Extension indisponible : " + (err?.message || err) };
+    }
+    if (!el.isConnected) return;
+    if (res?.ok) {
+      delete el.dataset.report;
+      delete el.dataset.reportId;
+      showNotice("Signalement annulé", "");
+    } else {
+      el.dataset.report = "done";
+      console.warn("[Phylactère] Annulation impossible :", res?.error);
+      showNotice("Annulation impossible : " + (res?.error || "réponse vide"), "error");
     }
   }
 
@@ -498,7 +526,7 @@
         ev.stopPropagation();
         if (ev.altKey) {
           ev.preventDefault();
-          report(e, b, el);
+          toggleReport(e, b, el);
         } else {
           el.classList.toggle("phy-peek");
         }

@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from phylactere import __version__
 from phylactere.cache import Cache, GlossaryEntry
-from phylactere.config import Settings, load_settings
+from phylactere.config import Settings, load_settings, reports_dir
 from phylactere.debug import render_debug
 from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError
@@ -42,7 +42,7 @@ from phylactere.pipeline import (
     TranslateResponse,
     decode_images,
 )
-from phylactere.reports import ReportRequest, ReportResponse
+from phylactere.reports import ReportRequest, ReportResponse, delete_report
 from phylactere.schemas import OcrResult
 from phylactere.translate import OllamaTranslator
 
@@ -179,6 +179,14 @@ def create_app(
         """Signalement d'une bulle (Alt+clic dans l'extension) : JSON et découpe PNG dans
         le dossier des signalements, pour constituer un corpus d'échecs."""
         return await request.app.state.pipeline.report(body)
+
+    @protected.delete("/report/{report_id}")
+    async def cancel_report(report_id: str) -> dict:
+        """Annule un signalement (second Alt+clic sur la bulle) : supprime ses fichiers."""
+        if not await asyncio.to_thread(delete_report, reports_dir(), report_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Signalement introuvable.")
+        logger.info("Signalement %s annulé.", report_id)
+        return {"removed": report_id}
 
     @protected.get("/glossary/{series_id}")
     async def get_glossary(request: Request, series_id: str) -> list[GlossaryEntry]:

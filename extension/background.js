@@ -12,6 +12,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const handlers = {
     translate: () => translate(msg.request),
     report: () => report(msg.request),
+    "report-cancel": () => call(`/report/${encodeURIComponent(msg.id)}`, { method: "DELETE" }),
     health: () => health(),
     models: () => models(),
     "clear-cache": () => clearCache(msg.seriesId),

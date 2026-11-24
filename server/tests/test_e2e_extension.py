@@ -581,7 +581,8 @@ def server_glossary(server) -> list[dict]:
 
 
 def test_alt_click_reports_bubble(browser, server):
-    """Alt+clic : le serveur enregistre la bulle (lignes OCR, découpe) ; pas d'effacement."""
+    """Alt+clic : le serveur enregistre la bulle (lignes OCR, découpe), sans l'effacer ;
+    un second Alt+clic annule le signalement."""
     context, worker = browser
     server.start()
     configure(worker, server.port, server.token, "scroll", lookahead=1)
@@ -602,8 +603,15 @@ def test_alt_click_reports_bubble(browser, server):
     assert [line["text"] for line in data["lines"]] == ["가66-0"]
     assert (reports_dir() / data["crop"]).is_file()
 
-    bubble.click(modifiers=["Alt"])  # déjà signalée : pas de doublon
-    page.wait_for_timeout(500)
+    # Second Alt+clic : le signalement est annulé (fichiers supprimés), pas dupliqué.
+    bubble.click(modifiers=["Alt"])
+    expect(bubble).not_to_have_attribute("data-report", re.compile(".*"), timeout=10_000)
+    expect(page.locator(BADGE)).to_contain_text("Signalement annulé")
+    assert list(reports_dir().iterdir()) == []
+
+    # Et la bulle peut être signalée de nouveau.
+    bubble.click(modifiers=["Alt"])
+    expect(bubble).to_have_attribute("data-report", "done", timeout=10_000)
     assert len(list(reports_dir().glob("*.json"))) == 1
 
 
