@@ -82,3 +82,7 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 15 : résumé « Précédemment… »
 - [x] Jalon 16 : export d'un épisode traduit en PDF
 - [x] Jalon 17 : cache (URL et nombre d'images, règle de choix unique, corrections à la lecture) et bouton d'export PDF
+- [x] Jalon 18 : découpage des gros fichiers (content.js, cache.py, pipeline.py), sans changement de comportement
+- [ ] Jalon 19 : alerte quand la page de Naver n'est plus reconnue
+- [ ] Jalon 20 : mesure du second passage (et gemma4:e4b au banc)
+- [ ] Jalon 21 : second passage avec les bulles suivantes (conditionnel, selon le jalon 20)

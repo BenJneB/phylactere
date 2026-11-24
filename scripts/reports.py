@@ -22,8 +22,8 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
-from phylactere.cache import read_corrections
 from phylactere.config import load_settings, reports_dir
+from phylactere.corrections import read_corrections
 from phylactere.naver import episode_page_url
 
 STYLE = """

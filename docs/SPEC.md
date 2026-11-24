@@ -45,7 +45,10 @@ phylactere/
 │  ├─ manifest.json
 │  ├─ defaults.js            réglages par défaut partagés (popup, content script, arrière-plan)
 │  ├─ background.js
-│  ├─ content.js / content.css
+│  ├─ naver.js               tout ce qui dépend de la structure des pages de Naver
+│  ├─ render.js              dessin des bulles (calques, taille du texte)
+│  ├─ bubbles.js             actions sur une bulle (signaler, retraduire, corriger)
+│  ├─ content.js / content.css   état, file d'attente, badge (content script principal)
 │  └─ popup.html / popup.js
 ├─ .gitattributes            fins de ligne (voir section 7)
 ├─ server/
@@ -60,6 +63,10 @@ phylactere/
 │  │  ├─ translate.py        client Ollama, prompt, parsing JSON
 │  │  ├─ glossary.py         glossaire par série
 │  │  ├─ cache.py            SQLite
+│  │  ├─ corrections.py      rattachement des corrections à leur bulle
+│  │  ├─ schemas.py          types partagés (boîtes, bulles, traductions, glossaire)
+│  │  ├─ api_models.py       requêtes et réponses de l'API HTTP
+│  │  ├─ pipeline.py         orchestration : cache → téléchargement → OCR → traduction
 │  │  ├─ errors.py           erreurs métier → code HTTP (un seul gestionnaire)
 │  │  └─ queue.py            files de priorité OCR / traduction
 │  └─ tests/
@@ -499,13 +506,73 @@ Ordre choisi : d'abord l'hygiène (cache borné, mesures), puis la retraduction,
     - Bouton d'export : `POST /export` (`ExportRequest`, identifiants en chiffres seulement puisqu'ils entrent dans l'URL de la page) renvoie le PDF, avec `Content-Disposition` et `X-Phylactere-Missing` (images sans bulles). Même code que le script (`export.render_episode`), avec les images gardées en mémoire par le serveur (`Pipeline.download`) ; `ExportError` devient une `ServiceError` (404 sans traduction, 502 page ou image illisible). Popup : bouton visible sur une page d'épisode, état demandé chaque seconde au content script (`episode-status` : images traduites, épisode fini), grisé tant que l'épisode n'est pas fini (une image en erreur ne bloque pas, elle est exportée sans bulles). Le script d'arrière-plan reçoit le PDF (`call(..., binary: true)`) et l'enregistre par `chrome.downloads` dans `Téléchargements/phylactere/` : URL `blob:` là où elle existe (page d'arrière-plan de Firefox, qui refuse les URL `data:`), URL `data:` dans le service worker de Chrome (sans `URL.createObjectURL`). Nouvelle permission `downloads` (Chrome et Firefox redemandent l'autorisation à la mise à jour).
     - Tests : migration (`image_url` vide pour les anciennes lignes), corrections appliquées par `get_translation`, règle unique (export et résumé font le même choix), nombre d'images conservé à la réouverture et par `clear`, `/translate` garde URL et nombre, résumé refait quand le nombre est appris plus tard, export sans lire la page, page lue quand une image n'a jamais été traduite ; `/export` (PDF, en-têtes, pas de page de Naver, 404, identifiants et jeton). e2e : bouton grisé avec l'avancement en mode défilement, activé une fois l'épisode traduit, clic → vrai PDF téléchargé.
 
+### Troisième série d'évolutions (jalons 18 à 21)
+
+Constat de départ (2026-11-24) : les fonctions de confort sont en place, et le point faible reste la qualité de traduction (64 points sur 114 au banc du jalon 4). Le signalement des bulles (jalon 11) n'a encore aucune donnée : on ne peut pas encore dire si les erreurs viennent du regroupement, de l'OCR ou du modèle.
+
+Ordre choisi : d'abord le découpage des gros fichiers, sans changement de comportement. Il isole tout ce qui dépend de Naver avant que le jalon 19 n'y touche, et prépare le jalon 21, qui modifie extension, files, cache et prompt à la fois. Ensuite, l'alerte quand Naver change sa page : c'est le seul risque de panne totale, et elle est silencieuse aujourd'hui. Puis le banc d'essai, qui mesure aussi le gain du second passage avant qu'on le construise. Enfin le second passage, **seulement si** le banc montre un gain. Chaque jalon reste livrable seul.
+
+18. **Découpage des gros fichiers**, sans changement de comportement. `content.js` (1085 lignes), `cache.py` (875) et `pipeline.py` (752) ont grossi jalon après jalon, et le jalon 21 doit modifier les trois.
+    - `content.js` → plusieurs content scripts chargés dans l'ordre par `manifest.json` (`"js": [...]`, comme `defaults.js` aujourd'hui). Les scripts d'une même entrée partagent le même « monde isolé » (l'espace JavaScript propre à l'extension dans la page, séparé de celui de Naver) : ils communiquent par un espace de noms unique (`globalThis.phy`), pas par des variables globales éparses. Découpage visé, à affiner à la lecture du code :
+      - `naver.js` : **tout** ce qui dépend de Naver (constantes `IMG_HOST` et `VIEWER`, `currentEpisode`, `isEpisodeImage`, lecture de `__state__`, épisodes précédent et suivant, téléchargement d'une page d'épisode). Si Naver change sa page, c'est le seul fichier à modifier ;
+      - `render.js` : calques, position, ajustement du texte, fondu ;
+      - `bubbles.js` : interactions avec une bulle (clic, signalement, retraduction, correction) ;
+      - `content.js` : état, file et quota, badge, observateurs, lancement.
+    - **À vérifier :** Firefox partage bien l'espace de noms entre les fichiers d'une même entrée `content_scripts`, comme Chrome. Les tests e2e ne couvrent pas Firefox.
+    - `pipeline.py` : les modèles de requête et de réponse de l'API (lignes 50 à 175 : `TranslateRequest`, `Stats`, `SummaryRequest`…) vont dans `schemas.py`, et `pipeline.py` ne garde que l'orchestration.
+    - `cache.py` : les fonctions sur les corrections (`match_correction`, `apply_corrections`, `load_corrections`, `read_corrections`) vont dans `corrections.py`, et la purge (taille, `_purge`, vide incrémental) dans des fonctions séparées de la classe si possible. On garde une seule classe `Cache` comme point d'entrée, avec un seul verrou et une seule connexion. Si le découpage oblige à partager l'état interne entre modules, on s'arrête là.
+    - Interdit dans ce jalon : changer un comportement, un prompt, un schéma de base ou une route. `PROMPT_VERSION` reste inchangé.
+    - Critère : tous les tests passent sans autre modification que les imports (`uv run pytest`, puis `-m e2e`, sur Ubuntu) et `ruff` passe. Lecture d'un épisode complet sur Windows dans Chrome **et** Firefox : bulles, clic, Alt+T, signalement, correction, export.
+
+    **Réalisation :**
+
+    - Extension : `content.js` passe de 1085 à 653 lignes. Ordre de chargement dans `manifest.json` : `defaults.js`, `naver.js`, `render.js`, `bubbles.js`, `content.js`. Chaque nouveau fichier s'enregistre dans `globalThis.phy` (`phy.naver`, `phy.render`, `phy.bubbleActions`) et `content.js` les reprend au démarrage. Le partage entre fichiers d'une même entrée `content_scripts` était déjà utilisé par `defaults.js` (`DEFAULTS`, `settings()`) et vérifié dans Firefox au jalon 5 : le point « à vérifier » ne porte plus que sur la non-régression.
+      - `naver.js` (148 lignes) : `IMG_HOST`, `VIEWER`, épisode courant, images de l'épisode (`episodeImages`, qui remplace la boucle de `scan()`), script d'état, épisodes précédent et suivant, page et images d'un autre épisode. Les fonctions reçoivent l'épisode en paramètre au lieu de lire l'état de `content.js` ;
+      - `render.js` (148 lignes) : `fillBubble`, `buildLayer` (calque sans l'insérer, clic transmis par un rappel), `position`, `fitText`, `buildPreviously`. Aucun état ;
+      - `bubbles.js` (233 lignes) : clic sur une bulle, signalement, retraduction d'une bulle et de l'image, correction. `phy.bubbleActions(app)` reçoit de `content.js` ce dont il a besoin (`ask`, `requestFor`, `showNotice`, `render`, `generation()`, `order()`) ;
+      - `content.js` garde l'état, la file d'attente, le préchargement, le résumé, le badge et les observateurs.
+    - Serveur :
+      - `api_models.py` : les modèles de l'API sortis de `pipeline.py` (752 → 642 lignes). Pas dans `schemas.py` comme prévu : ils dépendent du cache, du glossaire et des files, qui importent `schemas.py` (importation circulaire) ;
+      - `schemas.py` reçoit les types partagés que `translate.py`, `glossary.py`, `export.py` et `api_models.py` importaient de `cache.py` : `TranslatedBlock`, `TranslationResult`, `GlossaryEntry`, `Correction`, `compact`. `translate.py` et `glossary.py` ne dépendent plus du cache ;
+      - `corrections.py` : `match_correction`, `apply_corrections`, `load_corrections`, `read_corrections` (et `open_readonly`). `cache.py` passe de 875 à 744 lignes et garde une seule classe, une connexion et un verrou.
+    - Aucun comportement, prompt, schéma de base ni route modifié ; `PROMPT_VERSION` inchangé. Tests : seuls les imports changent (et un commentaire de `test_e2e_extension.py`) ; 295 tests et 29 e2e passent, comme avant le découpage.
+
+19. **Page de Naver non reconnue**. Aujourd'hui, si Naver renomme son conteneur ou change le format des URL d'images, `scan()` ne trouve rien et `updateBadge()` **retire** le badge : l'extension semble éteinte, sans explication. De même, si le bloc `__state__` disparaît, le préchargement de l'épisode suivant et le résumé « Précédemment… » cessent sans bruit.
+    - Trois cas distingués sur une page d'épisode (`/detail?titleId=…&no=…`), 10 s après le dernier scan sans résultat :
+      - des images de `image-comic.pstatic.net` sont dans la page, mais aucune n'est reconnue comme image de l'épisode → badge d'alerte « Page non reconnue (Naver a changé ?) ». L'infobulle précise la cause et ce qu'il faut faire (mettre à jour l'extension, signaler) ;
+      - aucune image de ce domaine → rien : épisode payant, verrouillé ou pas encore chargé. **À vérifier sur un vrai épisode verrouillé** qu'aucune image de ce domaine n'y figure. Sinon, il faut un autre indice pour éviter une fausse alerte ;
+      - conteneur `#sectionContWide` absent mais images reconnues → la traduction continue (repli actuel sur toute la page), avec une mention dans l'infobulle du badge.
+    - `__state__` introuvable dans la page courante → un avertissement dans la console (`[Phylactère]`), une seule fois par page. Il faut le distinguer du cas normal « pas d'épisode suivant » (dernier épisode ou épisode payant).
+    - Toute la détection se fait dans `naver.js` (jalon 18).
+    - Tests e2e (pages de test interceptées, comme au jalon 7) : URL d'images au mauvais format → badge d'alerte ; aucune image → pas de badge ; conteneur renommé → bulles posées et mention dans l'infobulle ; pas de `__state__` → avertissement dans la console, aucune erreur JavaScript.
+    - Critère : e2e sur Ubuntu. Sur Windows, aucune fausse alerte en lisant un épisode normal, ni sur un épisode verrouillé.
+
+20. **Mesure du second passage, et un seul nouveau modèle**. Le but principal est de mesurer le gain du second passage avant de construire le jalon 21. Ce jalon ne change le comportement du produit que si la mesure le justifie.
+    - Recherche du 2026-11-24 : le seul nouveau candidat plausible depuis le jalon 4 est `gemma4:e4b`. `gemma4:12b` pèse 7,6 Go et ne tient pas avec l'OCR sur 8 Go. La famille Gemma était derrière Qwen au jalon 4 (`gemma3:4b` 47 points contre 59 pour `qwen3.5:4b`), et le téléchargement de `gemma4:e4b` est annoncé à 9,6 Go : il ne tiendra peut-être pas sur le GPU. Il est donc ajouté au banc (`--models qwen3.5:9b,gemma4:e4b`), qui ne coûte qu'un passage de plus. Si sa part sur le GPU est inférieure à 100 %, on l'écarte sans le relire. `qwen3.5:9b` sert de référence.
+    - Deuxième épisode de référence, d'une autre série et d'un autre genre, pour ne pas choisir un modèle sur un seul épisode : `bench/references/<titleId>-<no>.json`, traduction rédigée par Claude comme au jalon 4.
+    - Nouvelle variante `suivantes` dans `bench.py`. Elle simule le second passage du jalon 21 : chaque image est retraduite avec, en contexte, les bulles précédentes **et** les bulles suivantes (texte coréen et traduction du premier passage). Il faut pour ça un paramètre `following` dans `translate.py` (section de prompt « Bulles suivantes… », absente quand la liste est vide). Le prompt du premier passage doit rester identique **au caractère près** (un test le vérifie) : `PROMPT_VERSION` ne change donc pas.
+    - Même méthode qu'au jalon 4 : relecture à l'aveugle par Claude (2, 1 ou 0 point par bulle), contrôle par l'utilisateur sur 10 bulles où les finalistes diffèrent, mode « Meilleures performances », mémoire vidéo et jetons par seconde relevés.
+    - Décisions, notées ici avec les chiffres :
+      - modèle par défaut changé seulement s'il gagne **au moins 5 points** par épisode de référence sans dépasser l'objectif de 8 s par image (section 8). Dans ce cas, mettre à jour `config.example.toml`, le README et `install.ps1` (modèle téléchargé) ;
+      - jalon 21 lancé seulement si `suivantes` gagne **au moins 5 points** sur `base` avec le modèle par défaut, sur les deux épisodes. Sinon, il est abandonné et le résultat est noté dans la section 10.
+    - Tests : variante `suivantes` (contexte envoyé, ordre des bulles), prompt du premier passage inchangé.
+    - Critère : code et tests sur Ubuntu (banc avec `qwen3.5:4b`, `--limit 6`) ; mesures sur le PC Windows.
+
+21. **Second passage avec les bulles suivantes** (variante B de l'ancien jalon « brouillon », section 10). **Conditionnel** : seulement si le jalon 20 a mesuré un gain. Le même modèle retraduit l'épisode une fois qu'il est traduit, en voyant aussi la suite. Il gagne la cohérence (noms, répliques qui se répondent d'une image à l'autre), pas la puissance d'un plus gros modèle.
+    - Nouvelle priorité `background`, sous `prefetch` : toute demande `visible` ou `prefetch` passe devant. L'extension envoie en `background`, dans l'ordre de lecture, les images de l'épisode déjà traduites, une fois sa propre file vide. En mode défilement, ce sont seulement les images déjà traduites. Les autres partent en second passage à leur tour, une fois traduites.
+    - Le serveur retraduit avec les bulles précédentes (du second passage quand elles existent) et les bulles suivantes (du premier passage). Résultat rangé sous sa propre clé de cache (identifiant de prompt distinct, par exemple `PROMPT_ID + "-second"`). `prompt_rank` le classe avant le premier passage : réouverture, résumé et export servent alors le second passage quand il existe.
+    - Les bulles affichées se mettent à jour en place, par la mécanique du jalon 13, avec un fondu discret. Une bulle corrigée ne bouge pas (correction appliquée après, comme aujourd'hui). Une bulle masquée par un clic ou en cours de correction attend d'être remise.
+    - Coût : environ le double de temps GPU par épisode (à 1,4 s par image, environ 1 min pour 40 images), seulement quand rien d'autre n'attend. Réglage `[translation] second_pass` (défaut : `true` si le jalon 20 a conclu), et case dans le popup.
+    - Tests : priorité `background` (servie en dernier, doublée par `visible` et `prefetch`), clé de cache et rang du second passage, contexte précédent et suivant, correction conservée, réglage désactivé → aucune requête `background`. e2e : texte remplacé après le second passage, bulle corrigée intacte, image visible jamais retardée par le second passage.
+    - Critère (Windows) : en lisant normalement, les premières bulles s'affichent aussi vite qu'avant, et le reste de l'épisode est mis à jour sans qu'on attende davantage les images visibles.
+
 ## 10. Hors périmètre v1
 
 Effacement et redessin du texte d'origine (inpainting), détecteur de bulles par réseau de neurones, autres sites que comic.naver.com, version mobile, publication sur les stores.
 
 ### Brouillon rapide, puis version améliorée (ancien jalon 16)
 
-Mis hors périmètre le 2026-11-24, détails conservés tels quels. Son numéro, 16, a été repris par l'export PDF : en cas de reprise, il prendra le numéro suivant.
+Mis hors périmètre le 2026-11-24, détails conservés tels quels. Son numéro, 16, a été repris par l'export PDF : en cas de reprise, il prendra le numéro suivant. La variante B est reprise seule aux jalons 20 (mesure) et 21 (réalisation, conditionnelle) ; la variante A reste hors périmètre.
 
 Un petit modèle traduit vite ce qu'on lit, et un plus gros repasse derrière quand le GPU est libre.
 - **À vérifier en premier, sur le PC Windows, sans certitude :** le modèle par défaut y est déjà `qwen3.5:9b`. Un 4b pour le brouillon et le 9b ensemble ne tiennent sans doute pas dans 8 Go avec PaddleOCR, et chaque basculement de modèle dans Ollama coûte un chargement (58 s à froid mesurées au jalon 3). Mesurer : mémoire GPU avec les deux modèles chargés (`OLLAMA_MAX_LOADED_MODELS`), et durée d'un basculement à chaud (fichiers dans le cache disque du système).

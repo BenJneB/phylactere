@@ -9,8 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from phylactere.cache import read_corrections
 from phylactere.config import load_settings, reports_dir
+from phylactere.corrections import read_corrections
 from phylactere.main import TOKEN_HEADER, create_app
 from phylactere.reports import CROP_MARGIN, crop_bubble
 from phylactere.schemas import Box

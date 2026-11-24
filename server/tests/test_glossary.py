@@ -7,10 +7,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from phylactere.cache import GlossaryEntry
 from phylactere.config import load_settings
 from phylactere.glossary import MAX_SUGGESTIONS, SUGGEST_SCHEMA, _RawEntry, filter_suggestions
 from phylactere.main import TOKEN_HEADER, create_app
+from phylactere.schemas import GlossaryEntry
 from tests.test_translate_api import World, request
 
 BUBBLES = [

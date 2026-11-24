@@ -11,7 +11,7 @@ from fpdf import FPDF
 from PIL import Image
 from pypdf import PdfReader
 
-from phylactere.cache import Cache, Correction, TranslatedBlock, TranslationResult
+from phylactere.cache import Cache
 from phylactere.config import load_settings
 from phylactere.export import (
     FONT,
@@ -29,7 +29,7 @@ from phylactere.export import (
 )
 from phylactere.naver import episode_image_urls
 from phylactere.pipeline import Pipeline
-from phylactere.schemas import Box, ImageSize
+from phylactere.schemas import Box, Correction, ImageSize, TranslatedBlock, TranslationResult
 from phylactere.translate import PROMPT_ID
 
 SERIES, EPISODE = "729047", "66"

@@ -39,11 +39,11 @@ from PIL import Image
 from translate_samples import episode_images
 
 from phylactere.__main__ import use_utf8_output
-from phylactere.cache import compact
 from phylactere.config import load_settings
 from phylactere.fetch import decode_image, fetch_bytes
 from phylactere.ocr import PaddleDetector, run_pipeline_with_neighbors
 from phylactere.reports import crop_bubble
+from phylactere.schemas import compact
 from phylactere.translate import OllamaTranslator, TranslationError
 
 ROOT = Path(__file__).resolve().parent.parent

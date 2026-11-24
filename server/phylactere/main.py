@@ -28,18 +28,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from phylactere import __version__
-from phylactere.cache import Cache, Correction, GlossaryEntry, TranslatedBlock
-from phylactere.config import Settings, load_settings, reports_dir
-from phylactere.debug import render_debug
-from phylactere.errors import ServiceError
-from phylactere.export import pdf_name
-from phylactere.fetch import FetchError, decode_image
-from phylactere.ocr import OcrEngine
-from phylactere.pipeline import (
+from phylactere.api_models import (
     CorrectionRequest,
     CorrectionTarget,
     ExportRequest,
-    Pipeline,
     RetranslateRequest,
     Stats,
     SuggestRequest,
@@ -49,8 +41,16 @@ from phylactere.pipeline import (
     TranslateRequest,
     TranslateResponse,
 )
+from phylactere.cache import Cache
+from phylactere.config import Settings, load_settings, reports_dir
+from phylactere.debug import render_debug
+from phylactere.errors import ServiceError
+from phylactere.export import pdf_name
+from phylactere.fetch import FetchError, decode_image
+from phylactere.ocr import OcrEngine
+from phylactere.pipeline import Pipeline
 from phylactere.reports import ReportRequest, ReportResponse, delete_report
-from phylactere.schemas import OcrResult
+from phylactere.schemas import Correction, GlossaryEntry, OcrResult, TranslatedBlock
 from phylactere.translate import OllamaTranslator
 
 TOKEN_HEADER = "X-Phylactere-Token"

@@ -1,21 +1,19 @@
 // content.js — injecté sur comic.naver.com
 // Repère les images de l'épisode, les fait traduire par le serveur local (via
 // background.js) et superpose les bulles traduites à l'emplacement du texte d'origine.
+// Chargé après naver.js (structure des pages de Naver), render.js (dessin des bulles) et
+// bubbles.js (actions sur une bulle) : voir manifest.json.
 
 (() => {
   "use strict";
 
-  // --- Réglages (à ajuster si Naver change son interface) ---
-  const IMG_HOST = "image-comic.pstatic.net";
-  // Conteneur des images de l'épisode (<img id="content_image_N">). Ailleurs dans la page,
-  // la vignette de l'épisode a une URL du même dossier : elle ne doit pas être traduite.
-  const VIEWER = "#sectionContWide";
+  const { naver, render: view, bubbleActions } = globalThis.phy;
+
   // Nombre maximal de requêtes en cours. Le navigateur n'ouvre que 6 connexions par
   // serveur : au-delà, une image devenue visible attendrait derrière le préchargement
   // sans même atteindre le serveur (qui, lui, sait faire passer « visible » devant).
   const MAX_IN_FLIGHT = 3;
   const HEALTH_RETRY_MS = 5000; // nouvel essai quand le serveur est arrêté
-  const PAD = 6; // marge autour du texte détecté (px de l'image d'origine)
   // Délai dépassé (serveur lent, pas arrêté) : l'image repart en file au plus 2 fois.
   const MAX_TIMEOUT_RETRIES = 2;
   // Mode « episode » : l'épisode suivant est préchargé une fois l'épisode courant traduit
@@ -46,7 +44,7 @@
   let lastHref = location.href;
   // Épisode du HTML chargé par le navigateur : le content script n'est injecté qu'au
   // chargement d'une page, pas lors d'une navigation sans rechargement.
-  const loadedEpisodeId = currentEpisode()?.episodeId;
+  const loadedEpisodeId = naver.currentEpisode()?.episodeId;
   // Préchargement de l'épisode suivant : null (pas encore demandé), puis
   // { state: "loading" | "none" | "ready", episodeId, urls, pending, done, failed }.
   let upcoming = null;
@@ -60,6 +58,15 @@
   let previously = null;
   let previouslyState = null;
   let summaryRequested = false;
+
+  const bubbles = bubbleActions({
+    ask,
+    requestFor: (e) => imageRequest(orderUrl, e.index, episode.episodeId, order.length),
+    showNotice,
+    render,
+    generation: () => generation,
+    order: () => order
+  });
 
   // --- Badge d'état ---
   const badge = document.createElement("div");
@@ -122,51 +129,16 @@
     if (e.altKey && e.code === "KeyT" && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) &&
         !e.target.isContentEditable) {
       e.preventDefault();
-      if (e.shiftKey) retranslateImage();
+      if (e.shiftKey) bubbles.retranslateImage();
       else toggleHidden();
     }
   });
 
   // --- Épisode et images ---
 
-  // Page de lecture : /webtoon/detail?titleId=…&no=… (ou /bestChallenge/detail, etc.)
-  function currentEpisode() {
-    if (!/\/detail/.test(location.pathname)) return null;
-    const q = new URLSearchParams(location.search);
-    const seriesId = q.get("titleId"), episodeId = q.get("no");
-    return seriesId && episodeId ? { seriesId, episodeId } : null;
-  }
-
-  function imageUrl(img) {
-    return img.currentSrc || img.src || img.dataset.src || "";
-  }
-
-  // Les images de l'épisode sont reconnues à leur URL : …/webtoon/<titleId>/<no>/…
-  // (pas à leur taille : on peut ainsi les envoyer au serveur avant qu'elles chargent).
-  function isEpisodeImage(url, ep = episode) {
-    if (!ep) return false;
-    try {
-      const u = new URL(url);
-      return u.protocol === "https:" && u.hostname === IMG_HOST &&
-        u.pathname.includes(`/${ep.seriesId}/${ep.episodeId}/`) &&
-        !/\/thumbnail[^/]*$/.test(u.pathname);
-    } catch {
-      return false;
-    }
-  }
-
   function scan() {
     if (!enabled || !episode) return;
-    const seen = new Set();
-    const list = [];
-    // Repli sur toute la page si Naver renomme le conteneur.
-    const root = document.querySelector(VIEWER) || document;
-    for (const img of root.querySelectorAll("img")) {
-      const url = imageUrl(img);
-      if (seen.has(url) || !isEpisodeImage(url)) continue;
-      seen.add(url);
-      list.push(track(url, img));
-    }
+    const list = naver.episodeImages(episode).map(({ url, img }) => track(url, img));
     if (!list.length) return;
     list.forEach((e, i) => (e.index = i));
     order = list;
@@ -195,7 +167,7 @@
   // préchargement (« prefetch »).
   const visibility = new IntersectionObserver((list) => {
     for (const ent of list) {
-      const e = entries.get(imageUrl(ent.target));
+      const e = entries.get(naver.imageUrl(ent.target));
       if (!e || e.img !== ent.target) continue;
       e.visible = ent.isIntersecting;
       if (e.visible && e.status === "working" && !e.sentVisible) send(e, "visible", false);
@@ -377,81 +349,13 @@
     loadUpcoming();
   }
 
-  // Article du script d'état que Naver met dans la page (window.__state__ = { …,
-  // prevArticle: { no: '65', … }, nextArticle: { no: '67', charge: false, … } }). Le content
-  // script ne voit pas les variables de la page, mais il lit le texte de ses scripts.
-  // Renvoie { block, no } (texte entre accolades et numéro, autre que l'épisode affiché),
-  // null si le script d'état n'a pas cet article, undefined s'il n'y a pas de script d'état.
-  function stateArticle(doc, name) {
-    let found;
-    const pattern = new RegExp(`${name}\\s*:\\s*\\{([^}]*)\\}`);
-    for (const script of doc.querySelectorAll("script:not([src])")) {
-      const text = script.textContent;
-      if (!text.includes("__state__")) continue;
-      found = null;
-      const block = pattern.exec(text)?.[1];
-      if (block === undefined) continue;
-      const no = /\bno\s*:\s*['"]?(\d+)/.exec(block)?.[1];
-      return no && no !== episode.episodeId ? { block, no } : null;
-    }
-    return found;
-  }
-
-  // Numéro de l'épisode suivant. Épisode payant (charge: true) ou absent (dernier épisode) :
-  // pas de préchargement.
-  function nextEpisodeNumber(doc) {
-    const article = stateArticle(doc, "nextArticle");
-    return article && !/\bcharge\s*:\s*true/.test(article.block) ? article.no : null;
-  }
-
-  // Page d'un épisode de la série, téléchargée sans l'ouvrir. Sans les cookies de
-  // l'utilisateur : Naver pourrait sinon compter l'épisode comme lu (historique, reprise de
-  // la lecture). Contrepartie : un épisode réservé aux comptes connectés n'est pas préchargé.
-  async function fetchEpisodePage(episodeId) {
-    const url = new URL(location.href);
-    url.searchParams.set("no", episodeId);
-    url.hash = "";
-    const res = await fetch(url, { credentials: "omit" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { url, doc: new DOMParser().parseFromString(await res.text(), "text/html") };
-  }
-
-  // URL d'image telle que scan() la verra à l'ouverture de l'épisode (URL absolue, image
-  // réelle plutôt qu'image d'attente) : les voisines entrent dans la clé du cache OCR.
-  function pageImageUrl(img, base, ep) {
-    for (const raw of [img.getAttribute("src"), img.dataset.src]) {
-      if (!raw) continue;
-      try {
-        const url = new URL(raw, base).href;
-        if (isEpisodeImage(url, ep)) return url;
-      } catch {
-        // URL invalide : candidate suivante
-      }
-    }
-    return null;
-  }
-
-  // Les URL des images d'un épisode sont dans le HTML de sa page (rendu par le serveur de
-  // Naver, #sectionContWide) : on applique la même sélection que scan().
-  async function episodeImageUrls(episodeId) {
-    const { url, doc } = await fetchEpisodePage(episodeId);
-    const root = doc.querySelector(VIEWER) || doc;
-    const ep = { seriesId: episode.seriesId, episodeId };
-    const urls = [];
-    for (const img of root.querySelectorAll("img")) {
-      const src = pageImageUrl(img, url, ep);
-      if (src && !urls.includes(src)) urls.push(src);
-    }
-    return urls;
-  }
-
   // Document de l'épisode affiché. Après une navigation sans rechargement, les scripts de
   // la page sont ceux du premier épisode chargé : le script d'état est alors relu dans le
   // HTML de l'épisode affiché.
   // Téléchargé une seule fois par épisode (résumé, puis préchargement du suivant).
   function currentEpisodeDoc() {
     if (episode.episodeId === loadedEpisodeId) return Promise.resolve(document);
-    currentDoc ??= fetchEpisodePage(episode.episodeId).then((page) => page.doc);
+    currentDoc ??= naver.fetchEpisodePage(episode.episodeId).then((page) => page.doc);
     currentDoc.catch(() => { currentDoc = null; }); // échec : nouvel essai la fois suivante
     return currentDoc;
   }
@@ -461,8 +365,8 @@
     let episodeId = null;
     let urls = [];
     try {
-      episodeId = nextEpisodeNumber(await currentEpisodeDoc());
-      if (episodeId) urls = await episodeImageUrls(episodeId);
+      episodeId = naver.nextEpisodeNumber(await currentEpisodeDoc(), episode.episodeId);
+      if (episodeId) urls = await naver.episodeImageUrls({ seriesId: episode.seriesId, episodeId });
     } catch (err) {
       console.warn("[Phylactère] Épisode suivant illisible :", err?.message || err);
       urls = [];
@@ -507,16 +411,6 @@
 
   // --- Résumé « Précédemment… » (jalon 15) ---
 
-  // Numéro de l'épisode précédent (vérifié sur la vraie page : prevArticle: { no: '65',
-  // blindInspection: false }). Script d'état sans prevArticle : premier épisode. Pas de
-  // script d'état du tout (Naver a changé sa page) : no - 1.
-  function prevEpisodeNumber(doc) {
-    const article = stateArticle(doc, "prevArticle");
-    if (article !== undefined) return article?.no ?? null;
-    const no = Number(episode.episodeId) - 1;
-    return no >= 1 ? String(no) : null;
-  }
-
   // À l'ouverture d'un épisode : résumé de l'épisode précédent, en priorité « prefetch ».
   // Le plus souvent, il a été calculé d'avance à la fin de sa lecture (maybeSummarize) et
   // le serveur le renvoie tout de suite. Rien en cache pour cet épisode (404) : pas d'encart.
@@ -526,7 +420,7 @@
     previouslyState = "loading";
     let episodeId = null;
     try {
-      episodeId = prevEpisodeNumber(await currentEpisodeDoc());
+      episodeId = naver.prevEpisodeNumber(await currentEpisodeDoc(), episode.episodeId);
     } catch (err) {
       console.warn("[Phylactère] Épisode précédent introuvable :", err?.message || err);
     }
@@ -558,32 +452,9 @@
   // Encart repliable au-dessus des images de l'épisode, dans le flux de la page.
   function showPreviously(data) {
     removePreviously();
-    const anchor = document.querySelector(VIEWER) || order[0]?.img;
+    const anchor = naver.viewer() || order[0]?.img;
     if (!anchor?.parentNode) return;
-    const box = document.createElement("details");
-    box.className = "phy-previously";
-    box.open = true;
-    box.lang = targetLang;
-    const head = document.createElement("summary");
-    const title = document.createElement("span");
-    title.textContent = "Précédemment…" + (data.partial ? " (épisode lu en partie)" : "");
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "phy-close";
-    close.textContent = "×";
-    close.title = "Fermer le résumé";
-    close.setAttribute("aria-label", "Fermer le résumé");
-    close.addEventListener("click", (ev) => {
-      ev.preventDefault(); // pas de repli : l'encart disparaît
-      removePreviously();
-    });
-    head.append(title, close);
-    const text = document.createElement("p");
-    text.textContent = data.summary;
-    text.title = `Résumé par ${data.model}, à partir de ${data.bubbles} bulle(s) traduite(s)`;
-    box.append(head, text);
-    // Les clics ne remontent pas à la page (barre d'outils de la visionneuse de Naver).
-    box.addEventListener("click", (ev) => ev.stopPropagation());
+    const box = view.buildPreviously(data, targetLang, removePreviously);
     anchor.parentNode.insertBefore(box, anchor);
     previously = box;
   }
@@ -610,53 +481,7 @@
     });
   }
 
-  // --- Signalement d'une bulle (Alt+clic) ---
-
-  // Le serveur enregistre la bulle, ses lignes OCR et une découpe de l'image, pour
-  // constituer un corpus d'échecs (scripts/reports.py en fait un rapport HTML).
-  // Un second Alt+clic annule le signalement (tant que la page n'a pas été rechargée :
-  // l'identifiant n'est gardé que sur la bulle affichée).
-  function toggleReport(e, b, el) {
-    if (el.dataset.report === "sending") return; // envoi ou annulation en cours
-    if (el.dataset.report === "done") cancelReport(el);
-    else report(e, b, el);
-  }
-
-  async function report(e, b, el) {
-    el.dataset.report = "sending";
-    const request = {
-      ...imageRequest(orderUrl, e.index, episode.episodeId, order.length),
-      box: b.box,
-      original: b.original,
-      translated: b.translated
-    };
-    const res = await ask({ type: "report", request });
-    if (!el.isConnected) return; // page remise à zéro entre-temps
-    if (res.ok) {
-      el.dataset.report = "done";
-      el.dataset.reportId = res.data.id;
-      showNotice("Bulle signalée (Alt+clic pour annuler)", "");
-    } else {
-      delete el.dataset.report;
-      console.warn("[Phylactère] Signalement impossible :", res.error);
-      showNotice("Signalement impossible : " + res.error, "error");
-    }
-  }
-
-  async function cancelReport(el) {
-    el.dataset.report = "sending";
-    const res = await ask({ type: "report-cancel", id: el.dataset.reportId });
-    if (!el.isConnected) return;
-    if (res.ok) {
-      delete el.dataset.report;
-      delete el.dataset.reportId;
-      showNotice("Signalement annulé", "");
-    } else {
-      el.dataset.report = "done";
-      console.warn("[Phylactère] Annulation impossible :", res.error);
-      showNotice("Annulation impossible : " + res.error, "error");
-    }
-  }
+  // --- Message temporaire du badge ---
 
   function showNotice(text, state) {
     notice = { text, state };
@@ -665,278 +490,21 @@
     updateBadge();
   }
 
-  // --- Retraduction (jalon 13) ---
-
-  // Maj+clic : le serveur retraduit la bulle seule (avec le modèle « pour retraduire » du
-  // popup) et la remplace dans son cache, sous la clé du modèle affiché : la nouvelle
-  // traduction reste au rechargement de la page.
-  async function retranslateBubble(e, i, el) {
-    if (el.dataset.retranslate) return; // déjà en cours
-    if (e.blocks[i].corrected) {
-      return showNotice("Bulle corrigée : effacez la correction d'abord", "error");
-    }
-    el.dataset.retranslate = "sending";
-    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId, order.length), box: e.blocks[i].box };
-    const res = await ask({ type: "retranslate", request });
-    if (!el.isConnected) return; // page remise à zéro ou image retraduite entre-temps
-    delete el.dataset.retranslate;
-    if (!res.ok) {
-      console.warn("[Phylactère] Retraduction impossible :", res.error);
-      showNotice("Retraduction impossible : " + res.error, "error");
-      return;
-    }
-    e.blocks[i] = res.data;
-    fillBubble(el, res.data);
-    fitText(e);
-    showNotice("Bulle retraduite" + (res.data.model ? ` (${res.data.model})` : ""), "");
-  }
-
-  // Image dont la plus grande hauteur est à l'écran.
-  function mostVisibleEntry() {
-    let best = null, bestHeight = 0;
-    for (const e of order) {
-      if (!e.visible || !e.img.isConnected) continue;
-      const r = e.img.getBoundingClientRect();
-      const height = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
-      if (height > bestHeight) { best = e; bestHeight = height; }
-    }
-    return best;
-  }
-
-  // Maj+Alt+T : toute l'image la plus visible est retraduite (`force` : le serveur ignore
-  // sa traduction en cache puis la remplace ; l'OCR en cache est réutilisé). Requête hors
-  // quota, comme un renvoi « visible » : l'utilisateur attend.
-  async function retranslateImage() {
-    const e = mostVisibleEntry();
-    if (!e) return;
-    if (e.status !== "done" || !e.layer) return showNotice("Image pas encore traduite", "error");
-    if (!e.blocks.length) return showNotice("Aucune bulle sur cette image", "");
-    if (e.retranslating) return;
-    const gen = generation;
-    e.retranslating = true;
-    e.layer.classList.add("phy-retranslating");
-    const request = { ...imageRequest(orderUrl, e.index, episode.episodeId, order.length), priority: "visible", force: true };
-    const res = await ask({ type: "translate", request });
-    if (gen !== generation) return;
-    e.retranslating = false;
-    e.layer?.classList.remove("phy-retranslating");
-    if (!res.ok) {
-      console.warn("[Phylactère] Retraduction impossible :", res.error);
-      showNotice("Retraduction impossible : " + res.error, "error");
-      return;
-    }
-    e.blocks = res.data.blocks;
-    e.imageSize = res.data.image_size;
-    render(e);
-    const model = res.data.blocks[0]?.model;
-    showNotice("Image retraduite" + (model ? ` (${model})` : ""), "");
-  }
-
-  // --- Correction à la main (jalon 14) ---
-
-  // Ctrl+clic : la bulle devient modifiable, son texte sélectionné. Entrée valide,
-  // Maj+Entrée ajoute un retour à la ligne, Échap (ou un clic ailleurs) annule. Le serveur
-  // garde la correction par image et langue, quel que soit le modèle : elle survit au
-  // rechargement, au vidage du cache et aux changements de modèle.
-  function startCorrection(e, i, el) {
-    if (el.isContentEditable || el.dataset.correct || el.dataset.retranslate) return;
-    el.classList.remove("phy-peek");
-    el.contentEditable = "true";
-    el.focus();
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const selection = getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-
-    const stop = (ev) => ev.stopPropagation(); // raccourcis clavier de la page de Naver
-    const finish = (commit) => {
-      el.removeEventListener("keydown", onKey);
-      el.removeEventListener("keyup", stop);
-      el.removeEventListener("keypress", stop);
-      el.removeEventListener("blur", onBlur);
-      const text = el.innerText.replace(/\u00a0/g, " ").trim();
-      el.contentEditable = "false";
-      el.removeAttribute("contenteditable");
-      getSelection().removeAllRanges();
-      fillBubble(el, e.blocks[i]); // texte d'avant : remplacé si le serveur accepte
-      if (commit && text !== e.blocks[i].translated.trim()) saveCorrection(e, i, el, text);
-      else fitText(e);
-    };
-    const onKey = (ev) => {
-      ev.stopPropagation();
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        finish(false);
-      } else if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
-        ev.preventDefault();
-        finish(true);
-      }
-    };
-    const onBlur = () => finish(false);
-    el.addEventListener("keydown", onKey);
-    el.addEventListener("keyup", stop);
-    el.addEventListener("keypress", stop);
-    el.addEventListener("blur", onBlur);
-  }
-
-  async function saveCorrection(e, i, el, text) {
-    const b = e.blocks[i];
-    // Traduction du modèle : celle d'avant la première correction.
-    const machine = b.corrected ? (b.machine ?? b.translated) : b.translated;
-    // Rien à effacer, ou texte identique à celui du modèle : pas de correction.
-    if (!b.corrected && !text) return;
-    el.dataset.correct = "sending";
-    const request = {
-      ...imageRequest(orderUrl, e.index, episode.episodeId, order.length),
-      box: b.box,
-      original: b.original,
-      text,
-      translated: machine
-    };
-    const res = await ask({ type: "correct", request });
-    if (!el.isConnected) return; // page remise à zéro ou image retraduite entre-temps
-    delete el.dataset.correct;
-    if (!res.ok) {
-      console.warn("[Phylactère] Correction impossible :", res.error);
-      showNotice("Correction impossible : " + res.error, "error");
-      return;
-    }
-    e.blocks[i] = text
-      ? { ...b, translated: text, corrected: true, machine }
-      : { ...b, translated: machine, corrected: false, machine: null };
-    fillBubble(el, e.blocks[i]);
-    fitText(e);
-    showNotice(text ? "Bulle corrigée" : "Correction effacée", "");
-  }
-
   // --- Rendu des bulles ---
 
-  // Texte, infobulle (original, et modèle qui a traduit s'il est connu) et liseré des
-  // bulles corrigées.
-  function fillBubble(el, b) {
-    el.textContent = b.translated;
-    if (b.corrected) {
-      el.dataset.corrected = "";
-      el.title = `${b.original}\n— corrigée à la main` +
-        (b.machine ? `\nTraduction du modèle : ${b.machine}` : "");
-    } else {
-      delete el.dataset.corrected;
-      el.title = b.model ? `${b.original}\n— ${b.model}` : b.original;
-    }
-  }
-
+  // Calque de l'entrée `e`, redessiné (nouvelle traduction, image retraduite).
   function render(e) {
     e.layer?.remove();
-    const { w: nw, h: nh } = e.imageSize;
-    const layer = document.createElement("div");
-    layer.className = "phy-layer" + (hidden ? " phy-hidden" : "");
-
-    e.blocks.forEach((b, i) => {
-      // Une bulle coupée entre deux images peut déborder en bas (y + h > hauteur).
-      const x = Math.max(0, b.box.x - PAD);
-      const y = Math.max(0, b.box.y - PAD);
-      const w = Math.min(nw - x, b.box.w + PAD * 2);
-      const h = b.box.h + PAD * 2;
-      const el = document.createElement("div");
-      el.className = "phy-bubble";
-      el.lang = targetLang;
-      fillBubble(el, b);
-      el.dataset.h = h;
-      el.style.left = (x / nw) * 100 + "%";
-      el.style.top = (y / nh) * 100 + "%";
-      el.style.width = (w / nw) * 100 + "%";
-      el.style.minHeight = (h / nh) * 100 + "%";
-      // Fond pris sur l'image par le serveur (narration sur fond coloré) ; sans couleur
-      // (fond dessiné, ou traduction en cache d'avant le jalon 9) : blanc de content.css.
-      if (b.bg) {
-        el.style.backgroundColor = b.bg;
-        el.style.color = b.fg || "#000";
-        // Ombre floue de la même couleur : adoucit le bord du rectangle sur fond uni.
-        el.style.boxShadow = `0 0 6px 3px ${b.bg}`;
-      }
-      // Clic : masque la bulle pour voir l'original (re-clic pour la remettre).
-      // Alt+clic : signale la bulle (mauvaise lecture ou mauvaise traduction).
-      // Maj+clic : la retraduit. Ctrl+clic : la corrige à la main. `e.blocks[i]` plutôt
-      // que `b` : la bulle a pu être retraduite ou corrigée depuis.
-      el.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        if (el.isContentEditable) return; // correction en cours : place le curseur
-        if (ev.ctrlKey) {
-          ev.preventDefault();
-          startCorrection(e, i, el);
-        } else if (ev.altKey) {
-          ev.preventDefault();
-          toggleReport(e, e.blocks[i], el);
-        } else if (ev.shiftKey) {
-          ev.preventDefault();
-          retranslateBubble(e, i, el);
-        } else {
-          el.classList.toggle("phy-peek");
-        }
-      });
-      layer.appendChild(el);
+    const layer = view.buildLayer(e, {
+      hidden,
+      lang: targetLang,
+      onClick: (ev, i, el) => bubbles.onClick(e, i, el, ev)
     });
     document.body.appendChild(layer);
     e.layer = layer;
     e.lastW = undefined;
     e.rect = null;
-    if (position(e, e.img.getBoundingClientRect())) fitText(e);
-  }
-
-  // Calque en position absolue dans la page, superposé à l'image (rectangle `r` déjà lu).
-  // Rien n'est réécrit si le calque n'a pas bougé : la page de Naver mute souvent
-  // (commentaires, publicités), et chaque mutation relance un repositionnement. Renvoie
-  // true si la largeur a changé : le texte des bulles est alors à réajuster (fitText).
-  function position(e, r) {
-    if (!r?.width || !r.height) {
-      e.layer.style.display = "none";
-      e.rect = null;
-      return false;
-    }
-    const left = r.left + scrollX, top = r.top + scrollY;
-    const rect = `${left},${top},${r.width},${r.height}`;
-    if (e.rect === rect) return false;
-    e.rect = rect;
-    Object.assign(e.layer.style, {
-      display: "",
-      left: left + "px",
-      top: top + "px",
-      width: r.width + "px",
-      height: r.height + "px"
-    });
-    if (e.lastW === r.width) return false;
-    e.lastW = r.width;
-    return true;
-  }
-
-  // Plus grande police (au pixel près, entre 9 px et la taille de départ) pour laquelle la
-  // traduction tient dans la zone d'origine, pour toutes les bulles des entrées données.
-  // Recherche par dichotomie, menée pour toutes les bulles à la fois : chaque étape écrit
-  // toutes les tailles puis lit toutes les hauteurs, soit une mise en page par étape au
-  // lieu d'une par bulle et par étape (redimensionnement d'un épisode entier).
-  function fitText(...list) {
-    const items = [];
-    for (const e of list) {
-      const scale = e.layer.clientWidth / e.imageSize.w;
-      for (const el of e.layer.children) {
-        const target = parseFloat(el.dataset.h) * scale * 1.1;
-        items.push({ el, target, lo: 9, hi: Math.round(Math.min(22, Math.max(12, target * 0.3))) });
-      }
-    }
-    for (const it of items) it.el.style.fontSize = it.hi + "px";
-    const searching = items.filter((it) => it.el.scrollHeight > it.target);
-    for (let step = searching; step.length; step = step.filter((it) => it.hi - it.lo > 1)) {
-      for (const it of step) {
-        it.mid = (it.lo + it.hi) >> 1;
-        it.el.style.fontSize = it.mid + "px";
-      }
-      for (const it of step) {
-        if (it.el.scrollHeight <= it.target) it.lo = it.mid;
-        else it.hi = it.mid;
-      }
-    }
-    for (const it of searching) it.el.style.fontSize = it.lo + "px";
+    if (view.position(e, e.img.getBoundingClientRect())) view.fitText(e);
   }
 
   let rafPending = false;
@@ -948,8 +516,8 @@
       // Toutes les lectures d'abord, puis toutes les écritures.
       const layers = [...entries.values()].filter((e) => e.layer);
       const rects = layers.map((e) => e.img.isConnected ? e.img.getBoundingClientRect() : null);
-      const resized = layers.filter((e, i) => position(e, rects[i]));
-      if (resized.length) fitText(...resized);
+      const resized = layers.filter((e, i) => view.position(e, rects[i]));
+      if (resized.length) view.fitText(...resized);
     });
   }
   addEventListener("resize", scheduleReposition);
@@ -975,7 +543,7 @@
   new MutationObserver((muts) => {
     if (location.href !== lastHref) { // navigation sans rechargement (SPA)
       lastHref = location.href;
-      const next = currentEpisode();
+      const next = naver.currentEpisode();
       if (next?.seriesId !== episode?.seriesId || next?.episodeId !== episode?.episodeId) {
         reset();
         return;
@@ -1014,7 +582,7 @@
     removePreviously();
     previouslyState = null;
     summaryRequested = false;
-    episode = currentEpisode();
+    episode = naver.currentEpisode();
     updateBadge();
     scan();
     loadPreviously();
