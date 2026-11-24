@@ -22,6 +22,9 @@
   // et la lecture passée à 80 % de ses images.
   const NEXT_EPISODE_PROGRESS = 0.8;
   const NOTICE_MS = 4000; // durée d'un message temporaire du badge
+  // Échecs qui suspendent la file (serveur arrêté, jeton refusé, service pas prêt) : la
+  // demande est refaite à la reprise.
+  const SUSPENDING = ["down", "token", "busy"];
   const HINT = "Clic ou Alt+T : afficher / masquer les traductions\n" +
     "Maj+clic sur une bulle : la retraduire\n" +
     "Ctrl+clic sur une bulle : la corriger (Entrée valide, Échap annule, vide : efface)\n" +
@@ -47,11 +50,12 @@
   // Préchargement de l'épisode suivant : null (pas encore demandé), puis
   // { state: "loading" | "none" | "ready", episodeId, urls, pending, done, failed }.
   let upcoming = null;
+  let currentDoc = null; // promesse du document de l'épisode affiché (voir currentEpisodeDoc)
   let notice = null; // { text, state } : message temporaire du badge (signalement)
   let noticeTimer = 0;
   // Résumé « Précédemment… » (jalon 15) : encart affiché, état de la demande du résumé de
-  // l'épisode précédent (null, "loading", "done", "retry" : serveur arrêté, redemandé à la
-  // reprise de la file) et résumé de l'épisode courant déjà demandé d'avance.
+  // l'épisode précédent (null, "loading" ou "retry" : serveur arrêté, redemandé à la reprise
+  // de la file) et résumé de l'épisode courant déjà demandé d'avance.
   let summaryEnabled = DEFAULTS.summary;
   let previously = null;
   let previouslyState = null;
@@ -357,19 +361,31 @@
     loadUpcoming();
   }
 
-  // Numéro de l'épisode suivant, lu dans le script d'état que Naver met dans la page
-  // (window.__state__ = { …, nextArticle: { no: '67', charge: false, … } }). Le content
+  // Article du script d'état que Naver met dans la page (window.__state__ = { …,
+  // prevArticle: { no: '65', … }, nextArticle: { no: '67', charge: false, … } }). Le content
   // script ne voit pas les variables de la page, mais il lit le texte de ses scripts.
-  // Épisode payant (charge: true) ou absent (dernier épisode) : pas de préchargement.
-  function nextEpisodeNumber(doc) {
+  // Renvoie { block, no } (texte entre accolades et numéro, autre que l'épisode affiché),
+  // null si le script d'état n'a pas cet article, undefined s'il n'y a pas de script d'état.
+  function stateArticle(doc, name) {
+    let found;
+    const pattern = new RegExp(`${name}\\s*:\\s*\\{([^}]*)\\}`);
     for (const script of doc.querySelectorAll("script:not([src])")) {
-      const block = /nextArticle\s*:\s*\{([^}]*)\}/.exec(script.textContent)?.[1];
+      const text = script.textContent;
+      if (!text.includes("__state__")) continue;
+      found = null;
+      const block = pattern.exec(text)?.[1];
       if (block === undefined) continue;
       const no = /\bno\s*:\s*['"]?(\d+)/.exec(block)?.[1];
-      if (!no || no === episode.episodeId || /\bcharge\s*:\s*true/.test(block)) return null;
-      return no;
+      return no && no !== episode.episodeId ? { block, no } : null;
     }
-    return null;
+    return found;
+  }
+
+  // Numéro de l'épisode suivant. Épisode payant (charge: true) ou absent (dernier épisode) :
+  // pas de préchargement.
+  function nextEpisodeNumber(doc) {
+    const article = stateArticle(doc, "nextArticle");
+    return article && !/\bcharge\s*:\s*true/.test(article.block) ? article.no : null;
   }
 
   // Page d'un épisode de la série, téléchargée sans l'ouvrir. Sans les cookies de
@@ -416,10 +432,12 @@
   // Document de l'épisode affiché. Après une navigation sans rechargement, les scripts de
   // la page sont ceux du premier épisode chargé : le script d'état est alors relu dans le
   // HTML de l'épisode affiché.
-  async function currentEpisodeDoc() {
-    return episode.episodeId === loadedEpisodeId
-      ? document
-      : (await fetchEpisodePage(episode.episodeId)).doc;
+  // Téléchargé une seule fois par épisode (résumé, puis préchargement du suivant).
+  function currentEpisodeDoc() {
+    if (episode.episodeId === loadedEpisodeId) return Promise.resolve(document);
+    currentDoc ??= fetchEpisodePage(episode.episodeId).then((page) => page.doc);
+    currentDoc.catch(() => { currentDoc = null; }); // échec : nouvel essai la fois suivante
+    return currentDoc;
   }
 
   async function loadUpcoming() {
@@ -461,7 +479,7 @@
     inFlight--;
     if (res.ok) {
       up.done++;
-    } else if (["down", "token", "busy"].includes(res.kind)) {
+    } else if (SUSPENDING.includes(res.kind)) {
       up.pending.unshift(i); // reprise avec la file
       suspend(res);
     } else {
@@ -473,22 +491,12 @@
 
   // --- Résumé « Précédemment… » (jalon 15) ---
 
-  // Numéro de l'épisode précédent, lu dans le script d'état de Naver comme nextArticle
-  // (vérifié sur la vraie page : prevArticle: { no: '65', blindInspection: false }).
-  // Script d'état présent sans prevArticle : premier épisode. Pas de script d'état du tout
-  // (Naver a changé sa page) : no - 1.
+  // Numéro de l'épisode précédent (vérifié sur la vraie page : prevArticle: { no: '65',
+  // blindInspection: false }). Script d'état sans prevArticle : premier épisode. Pas de
+  // script d'état du tout (Naver a changé sa page) : no - 1.
   function prevEpisodeNumber(doc) {
-    let hasState = false;
-    for (const script of doc.querySelectorAll("script:not([src])")) {
-      const text = script.textContent;
-      if (!text.includes("__state__")) continue;
-      hasState = true;
-      const block = /prevArticle\s*:\s*\{([^}]*)\}/.exec(text)?.[1];
-      if (block === undefined) continue;
-      const no = /\bno\s*:\s*['"]?(\d+)/.exec(block)?.[1];
-      return no && no !== episode.episodeId ? no : null;
-    }
-    if (hasState) return null;
+    const article = stateArticle(doc, "prevArticle");
+    if (article !== undefined) return article?.no ?? null;
     const no = Number(episode.episodeId) - 1;
     return no >= 1 ? String(no) : null;
   }
@@ -508,7 +516,7 @@
     }
     if (gen !== generation) return;
     if (!episodeId) {
-      previouslyState = "done";
+      previouslyState = null;
       return;
     }
     // Nombre d'images de l'épisode précédent : le serveur en déduit s'il a été lu en entier.
@@ -530,12 +538,12 @@
       if (res.kind !== "timeout") break;
     }
     if (res.ok) {
-      previouslyState = "done";
+      previouslyState = null;
       if (summaryEnabled) showPreviously(res.data);
       return;
     }
     // Serveur arrêté ou pas prêt : redemandé quand la file reprend.
-    previouslyState = ["down", "token", "busy"].includes(res.kind) ? "retry" : "done";
+    previouslyState = SUSPENDING.includes(res.kind) ? "retry" : null;
     console.info("[Phylactère] Pas de résumé de l'épisode précédent :", res.error);
   }
 
@@ -866,21 +874,22 @@
     e.layer = layer;
     e.lastW = undefined;
     e.rect = null;
-    position(e, e.img.getBoundingClientRect());
+    if (position(e, e.img.getBoundingClientRect())) fitText(e);
   }
 
   // Calque en position absolue dans la page, superposé à l'image (rectangle `r` déjà lu).
   // Rien n'est réécrit si le calque n'a pas bougé : la page de Naver mute souvent
-  // (commentaires, publicités), et chaque mutation relance un repositionnement.
+  // (commentaires, publicités), et chaque mutation relance un repositionnement. Renvoie
+  // true si la largeur a changé : le texte des bulles est alors à réajuster (fitText).
   function position(e, r) {
     if (!r?.width || !r.height) {
       e.layer.style.display = "none";
       e.rect = null;
-      return;
+      return false;
     }
     const left = r.left + scrollX, top = r.top + scrollY;
     const rect = `${left},${top},${r.width},${r.height}`;
-    if (e.rect === rect) return;
+    if (e.rect === rect) return false;
     e.rect = rect;
     Object.assign(e.layer.style, {
       display: "",
@@ -889,33 +898,38 @@
       width: r.width + "px",
       height: r.height + "px"
     });
-    if (e.lastW !== r.width) {
-      e.lastW = r.width;
-      fitText(e);
-    }
+    if (e.lastW === r.width) return false;
+    e.lastW = r.width;
+    return true;
   }
 
   // Plus grande police (au pixel près, entre 9 px et la taille de départ) pour laquelle la
-  // traduction tient dans la zone d'origine. Recherche par dichotomie : chaque mesure de
-  // scrollHeight force un calcul de mise en page.
-  function fitText(e) {
-    const scale = e.layer.clientWidth / e.imageSize.w;
-    for (const el of e.layer.children) {
-      const target = parseFloat(el.dataset.h) * scale * 1.1;
-      const fits = (size) => {
-        el.style.fontSize = size + "px";
-        return el.scrollHeight <= target;
-      };
-      let hi = Math.round(Math.min(22, Math.max(12, target * 0.3)));
-      if (fits(hi)) continue;
-      let lo = 9;
-      while (hi - lo > 1) {
-        const mid = (lo + hi) >> 1;
-        if (fits(mid)) lo = mid;
-        else hi = mid;
+  // traduction tient dans la zone d'origine, pour toutes les bulles des entrées données.
+  // Recherche par dichotomie, menée pour toutes les bulles à la fois : chaque étape écrit
+  // toutes les tailles puis lit toutes les hauteurs, soit une mise en page par étape au
+  // lieu d'une par bulle et par étape (redimensionnement d'un épisode entier).
+  function fitText(...list) {
+    const items = [];
+    for (const e of list) {
+      const scale = e.layer.clientWidth / e.imageSize.w;
+      for (const el of e.layer.children) {
+        const target = parseFloat(el.dataset.h) * scale * 1.1;
+        items.push({ el, target, lo: 9, hi: Math.round(Math.min(22, Math.max(12, target * 0.3))) });
       }
-      fits(lo);
     }
+    for (const it of items) it.el.style.fontSize = it.hi + "px";
+    const searching = items.filter((it) => it.el.scrollHeight > it.target);
+    for (let step = searching; step.length; step = step.filter((it) => it.hi - it.lo > 1)) {
+      for (const it of step) {
+        it.mid = (it.lo + it.hi) >> 1;
+        it.el.style.fontSize = it.mid + "px";
+      }
+      for (const it of step) {
+        if (it.el.scrollHeight <= it.target) it.lo = it.mid;
+        else it.hi = it.mid;
+      }
+    }
+    for (const it of searching) it.el.style.fontSize = it.lo + "px";
   }
 
   let rafPending = false;
@@ -927,7 +941,8 @@
       // Toutes les lectures d'abord, puis toutes les écritures.
       const layers = [...entries.values()].filter((e) => e.layer);
       const rects = layers.map((e) => e.img.isConnected ? e.img.getBoundingClientRect() : null);
-      layers.forEach((e, i) => position(e, rects[i]));
+      const resized = layers.filter((e, i) => position(e, rects[i]));
+      if (resized.length) fitText(...resized);
     });
   }
   addEventListener("resize", scheduleReposition);
@@ -988,6 +1003,7 @@
     entries.clear();
     order = [];
     upcoming = null;
+    currentDoc = null;
     removePreviously();
     previouslyState = null;
     summaryRequested = false;

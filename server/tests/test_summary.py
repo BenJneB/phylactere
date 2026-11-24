@@ -16,6 +16,7 @@ from phylactere.summary import (
     summarize,
     summary_user_prompt,
 )
+from phylactere.translate import OllamaTranslator
 from tests.test_translate_api import World, request
 
 
@@ -249,6 +250,8 @@ def test_long_episode_is_summarized_in_chunks():
     calls: list[str] = []
 
     class Translator:
+        chat_json = OllamaTranslator.chat_json
+
         async def chat(self, system, user, model, schema, num_ctx, timeout_s):
             calls.append(user)
             return json.dumps({"summary": f"S{len(calls)}"})

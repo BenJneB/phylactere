@@ -15,6 +15,7 @@ dependencies = [
     "pillow>=11",
     # Envoi de fichier à /debug/ocr (multipart/form-data)
     "python-multipart>=0.0.20",
+    "fpdf2>=2.8",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +42,7 @@ gpu = [
 dev = [
     "httpx2>=2.16.2",
     "playwright>=1.65.2",
+    "pypdf>=5",
     "pytest>=8.3",
     "ruff>=0.8",
 ]

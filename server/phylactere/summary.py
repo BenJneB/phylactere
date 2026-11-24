@@ -14,16 +14,13 @@ Ce prompt n'entre pas dans la clé des traductions : le modifier demande d'incr�
 """
 
 import logging
+from typing import Annotated
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, StringConstraints
 
+from phylactere.cache import EpisodeImages as Images
 from phylactere.config import SummaryConfig
-from phylactere.translate import (
-    InvalidResponse,
-    OllamaTranslator,
-    TranslationError,
-    language_name,
-)
+from phylactere.translate import OllamaTranslator, language_name
 
 logger = logging.getLogger("phylactere.summary")
 
@@ -36,12 +33,10 @@ SUMMARY_SCHEMA = {
     "required": ["summary"],
 }
 
-# Images de l'épisode : (index dans l'épisode, traductions des bulles dans l'ordre).
-Images = list[tuple[int, list[str]]]
-
 
 class _Response(BaseModel):
-    summary: str
+    # Résumé vide : réponse invalide, redemandée comme un JSON invalide.
+    summary: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 def summary_system_prompt(target_lang: str) -> str:
@@ -135,22 +130,18 @@ async def _ask(
 ) -> str:
     """Une demande de résumé ; une nouvelle tentative si la réponse est invalide ou vide,
     puis TranslationError (502)."""
-    for attempt in (1, 2):
-        try:
-            content = await translator.chat(
-                system, user, model, SUMMARY_SCHEMA, cfg.num_ctx, cfg.timeout_s
-            )
-            text = _Response.model_validate_json(content).summary.strip()
-        except InvalidResponse as exc:
-            logger.warning("Résumé, tentative %d : %s", attempt, exc)
-            continue
-        except ValidationError:
-            logger.warning("Résumé, tentative %d : JSON invalide %r", attempt, content[:200])
-            continue
-        if text:
-            return text
-        logger.warning("Résumé, tentative %d : résumé vide", attempt)
-    raise TranslationError("Le modèle n'a pas renvoyé de résumé valide.", 502)
+    response = await translator.chat_json(
+        system,
+        user,
+        model,
+        _Response,
+        SUMMARY_SCHEMA,
+        cfg.num_ctx,
+        cfg.timeout_s,
+        label="Résumé",
+        error="Le modèle n'a pas renvoyé de résumé valide.",
+    )
+    return response.summary
 
 
 async def summarize(

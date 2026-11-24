@@ -29,28 +29,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // réponse asynchrone
 });
 
-async function translate(request) {
+// Requête longue au serveur (OCR et modèle, file d'attente), avec le délai de /translate.
+// `retranslate` : modèle « pour retraduire » du popup ; `onTimeout` : voir call().
+async function post(path, request, { onTimeout, retranslate = false }) {
   const s = await settings();
-  // Maj+Alt+T : retraduction forcée de l'image, avec le modèle choisi pour retraduire.
-  const body = request.force ? withRetranslateModel(request, s) : withLangModel(request, s);
-  // Délai dépassé : le serveur est lent (CPU chargé), pas arrêté ; content.js remet l'image
-  // en file, et la nouvelle demande est fusionnée avec la tâche en cours ou servie par le cache.
-  return call("/translate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "timeout", s });
+  const body = retranslate ? withRetranslateModel(request, s) : withLangModel(request, s);
+  return call(path, { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout, s });
+}
+
+// Délai dépassé : le serveur est lent (CPU chargé), pas arrêté ; content.js remet l'image
+// en file, et la nouvelle demande est fusionnée avec la tâche en cours ou servie par le cache.
+// Maj+Alt+T (`force`) : retraduction de l'image avec le modèle choisi pour retraduire.
+function translate(request) {
+  return post("/translate", request, { onTimeout: "timeout", retranslate: !!request.force });
 }
 
 // Signalement d'une bulle (Alt+clic) : le serveur enregistre la bulle, ses lignes OCR et
-// sa découpe. Il peut devoir refaire l'OCR si le cache a été vidé : délai de /translate.
-async function report(request) {
-  const s = await settings();
-  const body = withLangModel(request, s);
-  return call("/report", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
+// sa découpe. Il peut devoir refaire l'OCR si le cache a été vidé.
+function report(request) {
+  return post("/report", request, { onTimeout: "error" });
 }
 
 // Maj+clic sur une bulle : le serveur la retraduit seule et la remplace dans son cache.
-async function retranslate(request) {
-  const s = await settings();
-  const body = withRetranslateModel(request, s);
-  return call("/retranslate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
+function retranslate(request) {
+  return post("/retranslate", request, { onTimeout: "error", retranslate: true });
+}
+
+// Résumé « Précédemment… » d'un épisode (jalon 15), calculé par le serveur à partir des
+// bulles en cache. Délai dépassé : le serveur continue et garde le résumé, qu'une nouvelle
+// demande retrouve (fusionnée avec la tâche en cours, ou en cache).
+function summary(request) {
+  return post("/summary", request, { onTimeout: "timeout" });
 }
 
 // Ctrl+clic puis Entrée (jalon 14) : texte saisi → PUT /correction ; texte vide → la
@@ -61,15 +70,6 @@ async function correct(request) {
   const erase = !text.trim();
   const body = withLangModel(erase ? target : { ...target, text, translated }, s);
   return call("/correction", { method: erase ? "DELETE" : "PUT", body, s });
-}
-
-// Résumé « Précédemment… » d'un épisode (jalon 15), calculé par le serveur à partir des
-// bulles en cache. Délai de /translate : au-delà, le serveur continue et garde le résumé,
-// qu'une nouvelle demande retrouve (fusionnée avec la tâche en cours, ou en cache).
-async function summary(request) {
-  const s = await settings();
-  const body = withLangModel(request, s);
-  return call("/summary", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "timeout", s });
 }
 
 function health() {
