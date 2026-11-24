@@ -219,7 +219,9 @@ Ollama utilise le GPU de son côté, indépendamment de l'OCR : `ollama ps` affi
 
 **Bulles mal placées, ratées ou mal traduites** : voir « Limites connues ». Le glossaire corrige les noms propres ; vider le cache de la série puis recharger la page refait les traductions.
 
-**Plus rien ne se passe sur Naver** (pas de badge) : vérifier que la traduction est activée dans le popup, et que l'extension est chargée (Firefox la retire à chaque fermeture). Si Naver a changé la structure de ses pages, les réglages en haut de `extension\naver.js` sont à adapter (voir `extension\README.md`).
+**Plus rien ne se passe sur Naver** (pas de badge) : vérifier que la traduction est activée dans le popup, et que l'extension est chargée (Firefox la retire à chaque fermeture). Sur un épisode payant ou verrouillé, l'absence de badge est normale.
+
+**Badge rouge « Page non reconnue (Naver a changé ?) »** (10 s après l'ouverture de l'épisode) : de grandes images de Naver sont dans la page, mais leur adresse n'a plus le format attendu. Naver a changé ses pages : les réglages en haut de `extension\naver.js` sont à adapter (voir `extension\README.md`). Si l'infobulle du badge (en temps normal) commence par « Conteneur des images introuvable », la traduction marche encore, mais c'est le même signe. Dans la console du navigateur (F12), un avertissement `[Phylactère] Script d'état de Naver (window.__state__) introuvable` signale que le préchargement de l'épisode suivant et le résumé « Précédemment… » ne marchent plus pour la même raison.
 
 ## Désinstallation
 

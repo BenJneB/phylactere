@@ -11,6 +11,10 @@ globalThis.phy.naver = (() => {
   // Conteneur des images de l'épisode (<img id="content_image_N">). Ailleurs dans la page,
   // la vignette de l'épisode a une URL du même dossier : elle ne doit pas être traduite.
   const VIEWER = "#sectionContWide";
+  // Largeur minimale (px) d'une image de IMG_HOST pour la compter comme image d'épisode
+  // non reconnue (jalon 19). Les images d'un épisode font 690 px de large ; les vignettes
+  // (épisode, série, autres œuvres), présentes même sur un épisode verrouillé, bien moins.
+  const MIN_EPISODE_IMAGE_WIDTH = 400;
 
   // Page de lecture : /webtoon/detail?titleId=…&no=… (ou /bestChallenge/detail, etc.)
   function currentEpisode() {
@@ -58,6 +62,49 @@ globalThis.phy.naver = (() => {
     return list;
   }
 
+  // Diagnostic d'une page d'épisode où episodeImages() ne trouve rien (jalon 19) :
+  // { unrecognized } nombre de grandes images de IMG_HOST qui ne sont pas reconnues comme
+  // images de l'épisode `ep`. Plus de 0 : Naver a sans doute changé le format de ses URL
+  // (ou l'adresse de la page). 0 : épisode payant, verrouillé ou pas encore chargé.
+  function diagnose(ep) {
+    let unrecognized = 0;
+    for (const img of document.querySelectorAll("img")) {
+      const url = imageUrl(img);
+      let u;
+      try {
+        u = new URL(url);
+      } catch {
+        continue;
+      }
+      if (u.hostname !== IMG_HOST || /thumbnail/i.test(u.pathname) || isEpisodeImage(url, ep)) continue;
+      // Largeur réelle si l'image est chargée, sinon affichée (ou attribut width).
+      if (Math.max(img.naturalWidth, img.width) >= MIN_EPISODE_IMAGE_WIDTH) unrecognized++;
+    }
+    return { unrecognized };
+  }
+
+  // Pages dont l'absence de script d'état a déjà été signalée : une fois par page.
+  const stateWarned = new WeakSet();
+
+  // Avertit dans la console si `doc` n'a pas de script d'état (window.__state__) : le
+  // préchargement de l'épisode suivant et le résumé « Précédemment… » ne marchent plus.
+  // Distinct d'un script d'état sans épisode suivant (dernier épisode, épisode payant).
+  function warnMissingState(doc) {
+    if (stateWarned.has(doc)) return;
+    stateWarned.add(doc);
+    console.warn("[Phylactère] Script d'état de Naver (window.__state__) introuvable dans " +
+      "la page : pas de préchargement de l'épisode suivant, et l'épisode précédent est " +
+      "deviné (no - 1). Naver a sans doute changé sa page.");
+  }
+
+  // Vérifie le script d'état de `doc` (page de l'épisode chargée par le navigateur).
+  function checkState(doc = document) {
+    const found = [...doc.querySelectorAll("script:not([src])")]
+      .some((script) => script.textContent.includes("__state__"));
+    if (!found) warnMissingState(doc);
+    return found;
+  }
+
   // Article du script d'état que Naver met dans la page (window.__state__ = { …,
   // prevArticle: { no: '65', … }, nextArticle: { no: '67', charge: false, … } }). Le content
   // script ne voit pas les variables de la page, mais il lit le texte de ses scripts.
@@ -75,6 +122,7 @@ globalThis.phy.naver = (() => {
       const no = /\bno\s*:\s*['"]?(\d+)/.exec(block)?.[1];
       return no && no !== episodeId ? { block, no } : null;
     }
+    if (found === undefined) warnMissingState(doc);
     return found;
   }
 
@@ -136,10 +184,14 @@ globalThis.phy.naver = (() => {
   }
 
   return {
+    IMG_HOST,
+    VIEWER,
     currentEpisode,
     imageUrl,
     viewer,
     episodeImages,
+    diagnose,
+    checkState,
     nextEpisodeNumber,
     prevEpisodeNumber,
     fetchEpisodePage,
