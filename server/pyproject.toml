@@ -40,6 +40,7 @@ gpu = [
 [dependency-groups]
 dev = [
     "httpx2>=2.16.2",
+    "playwright>=1.65.2",
     "pytest>=8.3",
     "ruff>=0.8",
 ]
@@ -75,4 +76,8 @@ testpaths = ["tests"]
 markers = [
     "smoke: lance le vrai serveur dans un sous-processus",
     "ocr: charge PaddleOCR (à partir du jalon 2)",
+    "e2e: extension chargée dans Chromium (Playwright), lancer avec -m e2e",
 ]
+# Les tests e2e demandent Chromium (uv run playwright install chromium) : exclus par défaut.
+# Un -m passé en ligne de commande remplace celui-ci.
+addopts = "-m 'not e2e'"

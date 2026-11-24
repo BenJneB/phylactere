@@ -105,10 +105,11 @@
 
   // Entrée : { url, img, index, status: "queued" | "working" | "done" | "error",
   //            visible, sentVisible, blocks, imageSize, layer, error }
+  // `visible` vaut null tant que l'IntersectionObserver n'a pas répondu pour l'image.
   function track(url, img) {
     let e = entries.get(url);
     if (!e) {
-      e = { url, img, index: 0, status: "queued", visible: false, sentVisible: false };
+      e = { url, img, index: 0, status: "queued", visible: null, sentVisible: false };
       entries.set(url, e);
     } else if (e.img !== img) {
       visibility.unobserve(e.img);
@@ -134,6 +135,10 @@
   // --- File d'attente ---
 
   function nextEntry() {
+    // Une image dont on ne sait pas encore si elle est visible attend le premier rappel de
+    // l'IntersectionObserver : sinon, à l'ouverture, l'image visible partait en
+    // « prefetch » puis devait être renvoyée en « visible ».
+    if (order.some((e) => e.visible === null)) return null;
     const queued = order.filter((e) => e.status === "queued");
     if (!queued.length) return null;
     const visible = queued.find((e) => e.visible);
@@ -325,8 +330,14 @@
   }
   addEventListener("resize", scheduleReposition);
   new ResizeObserver(scheduleReposition).observe(document.body);
-  // Une image qui finit de charger change de hauteur : on recale les calques.
-  document.addEventListener("load", (ev) => { if (ev.target.tagName === "IMG") scheduleReposition(); }, true);
+  // Une image qui finit de charger change de hauteur : on recale les calques. Son
+  // currentSrc change aussi (sans mutation d'attribut) : quand la page réutilise ses <img>
+  // pour un autre épisode, currentSrc garde l'ancienne URL jusqu'au chargement de la nouvelle.
+  document.addEventListener("load", (ev) => {
+    if (ev.target.tagName !== "IMG") return;
+    scheduleReposition();
+    scheduleScan();
+  }, true);
 
   // --- Navigation et changements du DOM ---
 

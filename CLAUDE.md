@@ -19,6 +19,7 @@ cd server
 uv sync --extra cpu            # PaddlePaddle CPU pour le dev (l'extra gpu est pour Windows)
 ../scripts/start.sh --reload   # lance le serveur avec config.dev.toml (127.0.0.1, port de la config)
 uv run pytest                  # -m "not smoke and not ocr" : sans le vrai serveur ni le vrai PaddleOCR
+uv run playwright install chromium && uv run pytest -m e2e   # extension dans Chromium (exclus par défaut)
 uv run python -m phylactere --check-ocr   # charge PaddleOCR et lit tests/data/korean_sample.png
 # Critère du jalon 3 (serveur lancé) : traduit un épisode de samples/ et vérifie chaque bulle
 PHYLACTERE_CONFIG=config.dev.toml uv run python ../scripts/translate_samples.py ../samples/729047-66 --limit 20
@@ -66,3 +67,8 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 4 : choix du modèle
 - [x] Jalon 5 : extension
 - [x] Jalon 6 : finition
+- [x] Jalon 7 : tests de bout en bout de l'extension (Playwright)
+- [ ] Jalon 8 : mode de traduction au défilement
+- [ ] Jalon 9 : couleur des bulles prise sur l'image
+- [ ] Jalon 10 : glossaire assisté (page d'édition, propositions par le modèle)
+- [ ] Jalon 11 : confort (signaler une bulle, préchargement de l'épisode suivant)
