@@ -11,7 +11,6 @@ Le jeton et le port sont lus dans la configuration (la même que le serveur).
 """
 
 import argparse
-import re
 import statistics
 import sys
 import time
@@ -23,8 +22,7 @@ import httpx
 from phylactere.__main__ import HOST, use_utf8_output
 from phylactere.config import load_settings
 from phylactere.main import TOKEN_HEADER
-
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0"
+from phylactere.naver import USER_AGENT, episode_image_urls
 
 
 def episode_images(source: str) -> tuple[str, str, list[str]]:
@@ -34,10 +32,7 @@ def episode_images(source: str) -> tuple[str, str, list[str]]:
         series_id, episode_id = query["titleId"][0], query["no"][0]
         page = httpx.get(source, headers={"User-Agent": USER_AGENT}, timeout=20)
         page.raise_for_status()
-        pattern = (
-            rf"https://image-comic\.pstatic\.net/webtoon/{series_id}/{episode_id}/[^\"']+\.jpg"
-        )
-        return series_id, episode_id, list(dict.fromkeys(re.findall(pattern, page.text)))
+        return series_id, episode_id, episode_image_urls(page.text, source, series_id, episode_id)
     folder = Path(source)
     series_id, _, episode_id = folder.name.partition("-")
     return series_id, episode_id, (folder / "urls.txt").read_text(encoding="utf-8").split()

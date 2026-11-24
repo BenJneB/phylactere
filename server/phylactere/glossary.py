@@ -15,13 +15,11 @@ d'incrémenter ``PROMPT_VERSION``.
 
 import logging
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from phylactere.cache import GlossaryEntry
 from phylactere.translate import (
-    InvalidResponse,
     OllamaTranslator,
-    TranslationError,
     language_name,
 )
 
@@ -162,22 +160,22 @@ async def suggest_entries(
     puis TranslationError (502)."""
     system = suggest_system_prompt(target_lang)
     user = suggest_user_prompt(bubbles, glossary, target_lang)
-    for attempt in (1, 2):
-        try:
-            content = await translator.chat(system, user, model, SUGGEST_SCHEMA, num_ctx, timeout_s)
-            parsed = _RawResponse.model_validate_json(content)
-        except InvalidResponse as exc:
-            logger.warning("Propositions, tentative %d : %s", attempt, exc)
-            continue
-        except ValidationError:
-            logger.warning("Propositions, tentative %d : JSON invalide %r", attempt, content[:200])
-            continue
-        suggestions = filter_suggestions(parsed.entries, bubbles, glossary)
-        logger.info(
-            "Glossaire : %d proposition(s) gardée(s) sur %d, à partir de %d bulle(s).",
-            len(suggestions),
-            len(parsed.entries),
-            len(bubbles),
-        )
-        return suggestions
-    raise TranslationError("Le modèle n'a pas renvoyé de propositions valides.", 502)
+    parsed = await translator.chat_json(
+        system,
+        user,
+        model,
+        _RawResponse,
+        SUGGEST_SCHEMA,
+        num_ctx,
+        timeout_s,
+        label="Propositions",
+        error="Le modèle n'a pas renvoyé de propositions valides.",
+    )
+    suggestions = filter_suggestions(parsed.entries, bubbles, glossary)
+    logger.info(
+        "Glossaire : %d proposition(s) gardée(s) sur %d, à partir de %d bulle(s).",
+        len(suggestions),
+        len(parsed.entries),
+        len(bubbles),
+    )
+    return suggestions

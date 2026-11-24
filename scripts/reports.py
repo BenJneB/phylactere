@@ -24,6 +24,7 @@ from pathlib import Path
 
 from phylactere.cache import read_corrections
 from phylactere.config import load_settings, reports_dir
+from phylactere.naver import episode_page_url
 
 STYLE = """
 body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; color: #1d2a44; background: #f6f7f9; }
@@ -52,14 +53,10 @@ def load_reports(directory: Path) -> list[dict]:
     return reports
 
 
-def episode_url(series_id: str, episode_id: str) -> str:
-    return f"https://comic.naver.com/webtoon/detail?titleId={series_id}&no={episode_id}"
-
-
 def render_correction(row: dict) -> str:
     created = datetime.fromtimestamp(row["created"]).astimezone().isoformat(timespec="seconds")
     box = row["box"]
-    episode = episode_url(row["series_id"], row["episode_id"])
+    episode = episode_page_url(row["series_id"], row["episode_id"])
     machine = row.get("translated")
     machine_html = (
         f'<div class="text machine">{escape(machine)}</div>'
@@ -92,7 +89,7 @@ def render_report(report: dict) -> str:
         if lines
         else "<p class='meta'>Bulle non retrouvée dans le résultat OCR : pas de lignes.</p>"
     )
-    episode = episode_url(report["series_id"], report["episode_id"])
+    episode = episode_page_url(report["series_id"], report["episode_id"])
     return f"""<div class="report">
 <img src="{escape(report.get("crop", ""))}" alt="découpe de la bulle">
 <div>

@@ -22,6 +22,7 @@ un verrou (une seule connexion).
 """
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import json
@@ -29,9 +30,10 @@ import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from phylactere.schemas import Box, Edge, ImageSize, OcrResult
 
@@ -176,6 +178,10 @@ class StoredSummary(BaseModel):
     bubbles: int
 
 
+# Colonnes de la table summary qui portent un StoredSummary.
+SUMMARY_FIELDS = tuple(StoredSummary.model_fields)
+
+
 class Correction(BaseModel):
     box: Box
     original: str
@@ -227,32 +233,116 @@ def apply_corrections(
     return out
 
 
+# Images d'un épisode : (index dans l'épisode, traductions des bulles dans l'ordre).
+EpisodeImages = list[tuple[int, list[str]]]
+
+
+def translation_key(image_url: str, target_lang: str, model: str, prompt_id: str) -> str:
+    """Clé d'une traduction en cache : ``<sha1 de l'URL>:<langue>:<modèle>:<prompt>``.
+    Seul endroit qui fixe ce format (voir image_hash et read_translations)."""
+    return f"{sha1(image_url)}:{target_lang}:{model}:{prompt_id}"
+
+
 def image_hash(translation_key: str) -> str:
     """Empreinte de l'URL de l'image, en tête de la clé d'une traduction."""
     return translation_key.split(":", 1)[0]
+
+
+def load_corrections(db: sqlite3.Connection, image: str, target_lang: str) -> list[Correction]:
+    """Corrections d'une image (empreinte de l'URL) dans une langue, dans l'ordre de saisie."""
+    rows = db.execute(
+        "SELECT box, original, text FROM correction WHERE image = ? AND target_lang = ?"
+        " ORDER BY id",
+        (image, target_lang),
+    )
+    return [
+        Correction(box=Box.model_validate_json(box), original=original, text=text)
+        for box, original, text in rows
+    ]
+
+
+@contextlib.contextmanager
+def open_readonly(path: Path) -> Iterator[sqlite3.Connection | None]:
+    """Base ``path`` en lecture seule (scripts : le serveur peut tourner) ; None si elle
+    n'existe pas."""
+    if not path.is_file():
+        yield None
+        return
+    with contextlib.closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as db:
+        yield db
 
 
 def read_corrections(path: Path) -> list[dict]:
     """Toutes les corrections de la base ``path``, de la plus récente à la plus ancienne
     (scripts/reports.py). Base ouverte en lecture seule : le serveur peut tourner. Pas de
     base, ou base d'avant le jalon 14 : liste vide."""
-    if not path.is_file():
-        return []
-    db = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
-    try:
-        cursor = db.execute(
-            "SELECT target_lang, box, original, text, created, image_url, series_id,"
-            " episode_id, image_index, model, translated FROM correction ORDER BY created DESC"
-        )
+    with open_readonly(path) as db:
+        if db is None:
+            return []
+        try:
+            cursor = db.execute(
+                "SELECT target_lang, box, original, text, created, image_url, series_id,"
+                " episode_id, image_index, model, translated FROM correction"
+                " ORDER BY created DESC"
+            )
+        except sqlite3.OperationalError:  # pas de table correction
+            return []
         names = [column[0] for column in cursor.description]
         rows = [dict(zip(names, row, strict=True)) for row in cursor]
-    except sqlite3.OperationalError:  # pas de table correction
-        return []
-    finally:
-        db.close()
     for row in rows:
         row["box"] = json.loads(row["box"])
     return rows
+
+
+def read_translations(
+    path: Path, image_urls: list[str], target_lang: str, model: str, prompt_id: str
+) -> dict[str, tuple[str, TranslationResult]]:
+    """Traductions en cache des images ``image_urls`` (export PDF, jalon 16), corrections
+    appliquées : URL → (modèle, traduction). Pour chaque image : celle de ``model`` avec le
+    prompt actuel (``prompt_id``), sinon celle d'un autre modèle avec le prompt actuel (la
+    plus récente), sinon une traduction d'un ancien prompt, ``model`` d'abord. Image
+    absente du résultat si elle n'a pas de traduction lisible dans ``target_lang``.
+
+    Base ouverte en lecture seule : le serveur peut tourner. Pas de base : dict vide."""
+    found: dict[str, tuple[str, TranslationResult]] = {}
+    with open_readonly(path) as db:
+        if db is None:
+            return found
+        for url in image_urls:
+            image = sha1(url)
+            # Clés « <sha1>:… » (translation_key) : intervalle sur la clé primaire (« ; »
+            # suit « : »), puis le prompt actuel d'abord.
+            row = db.execute(
+                "SELECT model, result FROM translation"
+                " WHERE key >= ? AND key < ? AND target_lang = ?"
+                " ORDER BY substr(key, -?) = ? DESC, model = ? DESC, created DESC, rowid DESC"
+                " LIMIT 1",
+                (
+                    f"{image}:",
+                    f"{image};",
+                    target_lang,
+                    len(prompt_id) + 1,
+                    f":{prompt_id}",
+                    model,
+                ),
+            ).fetchone()
+            if row is None:
+                continue
+            try:
+                result = TranslationResult.model_validate_json(row[1])
+            except ValidationError:
+                logger.warning("Traduction illisible dans le cache, ignorée : %s", url)
+                continue
+            try:
+                corrections = load_corrections(db, image, target_lang)
+            except sqlite3.OperationalError:  # base d'avant le jalon 14
+                corrections = []
+            except ValidationError:
+                logger.warning("Correction illisible dans le cache, ignorée : %s", url)
+                corrections = []
+            blocks = apply_corrections(result.blocks, corrections)
+            found[url] = (row[0], result.model_copy(update={"blocks": blocks}))
+    return found
 
 
 def _threaded(func):
@@ -506,7 +596,7 @@ class Cache:
             " WHERE series_id = ? AND episode_id = ? AND target_lang = ? AND model = ?"
             " AND image_index < ? ORDER BY image_index DESC, created DESC, rowid DESC",
             (series_id, episode_id, target_lang, model, image_index),
-        ).fetchall()
+        )  # lu au fil de l'eau : seules les dernières images servent
         pairs: list[tuple[str, str]] = []
         seen: set[int] = set()
         for index, key, raw in rows:
@@ -554,7 +644,7 @@ class Cache:
     @_threaded
     def episode_bubbles(
         self, series_id: str, episode_id: str, target_lang: str, model: str
-    ) -> list[tuple[int, list[str]]]:
+    ) -> EpisodeImages:
         """Traductions des bulles de l'épisode en cache, corrections appliquées : une entrée
         par image traduite, (index, textes dans l'ordre de lecture), par index croissant.
 
@@ -579,7 +669,7 @@ class Cache:
                     max(row[2] for row in by_model[m]),
                 ),
             )
-        images: list[tuple[int, list[str]]] = []
+        images: EpisodeImages = []
         for _, index, _, key, raw in by_model[model]:
             # Une image traduite avec plusieurs versions du prompt : la plus récente seule.
             if images and images[-1][0] == index:
@@ -595,21 +685,11 @@ class Cache:
         self, series_id: str, episode_id: str, target_lang: str, model: str
     ) -> StoredSummary | None:
         row = self._db.execute(
-            "SELECT text, version, source, partial, images, bubbles FROM summary"
+            f"SELECT {', '.join(SUMMARY_FIELDS)} FROM summary"
             " WHERE series_id = ? AND episode_id = ? AND target_lang = ? AND model = ?",
             (series_id, episode_id, target_lang, model),
         ).fetchone()
-        if row is None:
-            return None
-        text, version, source, partial, images, bubbles = row
-        return StoredSummary(
-            text=text,
-            version=version,
-            source=source,
-            partial=bool(partial),
-            images=images,
-            bubbles=bubbles,
-        )
+        return None if row is None else StoredSummary(**dict(zip(SUMMARY_FIELDS, row, strict=True)))
 
     @_threaded
     def put_summary(
@@ -620,38 +700,24 @@ class Cache:
         model: str,
         summary: StoredSummary,
     ) -> None:
+        values = summary.model_dump() | {
+            "series_id": series_id,
+            "episode_id": episode_id,
+            "target_lang": target_lang,
+            "model": model,
+            "created": time.time(),
+        }
         self._db.execute(
-            "INSERT OR REPLACE INTO summary (series_id, episode_id, target_lang, model,"
-            " version, source, text, partial, images, bubbles, created)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                series_id,
-                episode_id,
-                target_lang,
-                model,
-                summary.version,
-                summary.source,
-                summary.text,
-                int(summary.partial),
-                summary.images,
-                summary.bubbles,
-                time.time(),
-            ),
+            f"INSERT OR REPLACE INTO summary ({', '.join(values)})"
+            f" VALUES ({', '.join(':' + name for name in values)})",
+            values,
         )
         self._db.commit()
 
     # --- Corrections (jalon 14) ---
 
     def _corrections(self, image: str, target_lang: str) -> list[Correction]:
-        rows = self._db.execute(
-            "SELECT box, original, text FROM correction WHERE image = ? AND target_lang = ?"
-            " ORDER BY id",
-            (image, target_lang),
-        )
-        return [
-            Correction(box=Box.model_validate_json(box), original=original, text=text)
-            for box, original, text in rows
-        ]
+        return load_corrections(self._db, image, target_lang)
 
     def _corrected_blocks(self, key: str, target_lang: str, raw: str) -> list[TranslatedBlock]:
         """Bulles d'une traduction en cache (``raw``), corrections appliquées."""

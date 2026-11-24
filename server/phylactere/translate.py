@@ -14,6 +14,7 @@ manquantes, puis une requête par bulle.
 import json
 import logging
 from collections.abc import Callable
+from typing import TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -67,6 +68,9 @@ RESPONSE_SCHEMA = {
     },
     "required": ["translations"],
 }
+
+
+ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 
 
 class TranslationError(ServiceError):
@@ -268,6 +272,31 @@ class OllamaTranslator:
         if self._on_stats is not None:
             self._on_stats(ollama_stats(data))
         return content
+
+    async def chat_json(
+        self,
+        system: str,
+        user: str,
+        model: str,
+        response_model: type[ResponseModel],
+        schema: dict,
+        num_ctx: int = 0,
+        timeout_s: float = 0,
+        label: str = "Réponse",
+        error: str = "Le modèle n'a pas renvoyé de réponse valide.",
+    ) -> ResponseModel:
+        """``chat`` dont la réponse est validée par ``response_model`` (tâches d'une seule
+        requête : propositions de glossaire, résumé). Une nouvelle tentative si la réponse
+        est invalide, puis TranslationError (502) avec ``error``."""
+        for attempt in (1, 2):
+            try:
+                content = await self.chat(system, user, model, schema, num_ctx, timeout_s)
+                return response_model.model_validate_json(content)
+            except InvalidResponse as exc:
+                logger.warning("%s, tentative %d : %s", label, attempt, exc)
+            except ValidationError:
+                logger.warning("%s, tentative %d : JSON invalide %r", label, attempt, content[:200])
+        raise TranslationError(error, 502)
 
     async def _request(
         self,

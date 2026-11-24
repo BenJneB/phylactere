@@ -18,6 +18,7 @@ from phylactere.cache import (
     TranslatedBlock,
     TranslationResult,
     sha1,
+    translation_key,
 )
 from phylactere.config import Settings, reports_dir
 from phylactere.errors import ServiceError
@@ -354,7 +355,7 @@ class Pipeline:
 
     @staticmethod
     def _translation_key(image_url: str, lang: str, model: str) -> str:
-        return f"{sha1(image_url)}:{lang}:{model}:{PROMPT_ID}"
+        return translation_key(image_url, lang, model, PROMPT_ID)
 
     async def translate(self, request: TranslateRequest) -> TranslateResponse:
         lang, model = self._check(request)
