@@ -5,13 +5,20 @@ import json
 import logging
 import time
 from collections import OrderedDict, deque
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
 from PIL import Image
 from pydantic import BaseModel, Field, StringConstraints
 
-from phylactere.cache import Cache, Correction, TranslatedBlock, TranslationResult, sha1
+from phylactere.cache import (
+    Cache,
+    Correction,
+    StoredSummary,
+    TranslatedBlock,
+    TranslationResult,
+    sha1,
+)
 from phylactere.config import Settings, reports_dir
 from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError, check_url, decode_image, fetch_bytes
@@ -26,6 +33,7 @@ from phylactere.reports import (
     write_report,
 )
 from phylactere.schemas import Box, ImageRequest, OcrResult, match_box
+from phylactere.summary import SUMMARY_VERSION, summarize
 from phylactere.translate import PROMPT_ID, PROMPT_VERSION, OllamaTranslator
 
 logger = logging.getLogger("phylactere.pipeline")
@@ -99,6 +107,7 @@ class CacheStats(BaseModel):
     translations: int
     glossaries: int
     corrections: int
+    summaries: int
 
 
 class Stats(BaseModel):
@@ -124,6 +133,33 @@ class SuggestResponse(BaseModel):
     entries: list[Suggestion]
     # Nombre de bulles envoyées au modèle.
     bubbles: int
+
+
+class SummaryRequest(BaseModel):
+    """Résumé « Précédemment… » d'un épisode (jalon 15)."""
+
+    series_id: str = Field(min_length=1, max_length=64)
+    episode_id: str = Field(min_length=1, max_length=64)
+    target_lang: str | None = Field(default=None, min_length=2, max_length=10)
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    # Nombre d'images de l'épisode, quand l'extension le connaît : moins d'images traduites
+    # en cache = épisode lu en partie.
+    image_count: int | None = Field(default=None, ge=1, le=2000)
+    # « background » : épisode courant, résumé d'avance pour l'ouverture du suivant ;
+    # « prefetch » : résumé de l'épisode précédent qui manque à l'ouverture.
+    priority: Literal["prefetch", "background"] = "prefetch"
+
+
+class SummaryResponse(BaseModel):
+    series_id: str
+    episode_id: str
+    summary: str
+    # Épisode lu en partie : des images de l'épisode manquent dans le cache.
+    partial: bool
+    images: int  # images traduites résumées
+    bubbles: int
+    model: str
+    cached: bool
 
 
 # Version du format des résultats OCR mis en cache : à incrémenter quand Bubble change
@@ -510,6 +546,90 @@ class Pipeline:
             removed,
         )
         return removed
+
+    # --- Résumé « Précédemment… » (jalon 15) ---
+
+    async def summary(self, request: SummaryRequest) -> SummaryResponse:
+        """Résumé de l'épisode à partir des traductions en cache (corrections comprises).
+
+        Gardé en cache avec l'empreinte des bulles résumées : refait seulement si elles ont
+        changé (images traduites depuis, correction, retraduction) ou si le prompt a
+        changé. Plus aucune bulle en cache (cache vidé ou purgé) : le résumé gardé reste
+        servi. Passe par la file de traduction : jamais deux modèles chargés à la fois.
+        """
+        lang, model = self._lang_model(request.target_lang, request.model)
+        images = await self._cache.episode_bubbles(
+            request.series_id, request.episode_id, lang, model
+        )
+        bubbles = sum(len(texts) for _, texts in images)
+        # Images manquantes : un trou dans les index, ou moins d'images que l'épisode.
+        expected = max(request.image_count or 0, images[-1][0] + 1 if images else 0)
+        partial = len(images) < expected
+        source = sha1(json.dumps(images, ensure_ascii=False))
+
+        def response(stored: StoredSummary, cached: bool) -> SummaryResponse:
+            return SummaryResponse(
+                series_id=request.series_id,
+                episode_id=request.episode_id,
+                summary=stored.text,
+                partial=stored.partial,
+                images=stored.images,
+                bubbles=stored.bubbles,
+                model=model,
+                cached=cached,
+            )
+
+        stored = await self._cache.get_summary(request.series_id, request.episode_id, lang, model)
+        if stored is not None and (
+            not bubbles
+            or (
+                stored.version == SUMMARY_VERSION
+                and stored.source == source
+                # Sans nombre d'images, rien ne contredit la mention « lu en partie ».
+                and (request.image_count is None or stored.partial == partial)
+            )
+        ):
+            return response(stored, True)
+        if not bubbles:
+            raise ServiceError(
+                "Aucune bulle traduite en cache pour cet épisode : il n'a pas été lu avec "
+                "Phylactère.",
+                404,
+            )
+
+        async def compute() -> StoredSummary:
+            start = time.perf_counter()
+            text = await summarize(
+                self._translator, images, lang, model, partial, self._settings.summary
+            )
+            result = StoredSummary(
+                text=text,
+                version=SUMMARY_VERSION,
+                source=source,
+                partial=partial,
+                images=len(images),
+                bubbles=bubbles,
+            )
+            await self._cache.put_summary(
+                request.series_id, request.episode_id, lang, model, result
+            )
+            logger.info(
+                "Résumé de l'épisode %s/%s%s : %d image(s), %d bulle(s), %d ms.",
+                request.series_id,
+                request.episode_id,
+                " (lu en partie)" if partial else "",
+                len(images),
+                bubbles,
+                _ms(start),
+            )
+            return result
+
+        # Même clé pour le résumé demandé d'avance et celui demandé à l'ouverture : la
+        # seconde demande rejoint la première, et la fait passer devant si elle est plus
+        # prioritaire.
+        key = f"summary:{request.series_id}:{request.episode_id}:{lang}:{model}:{source}"
+        stored = await self.translation_queue.run(key, request.priority, compute)
+        return response(stored, False)
 
     # --- Propositions de glossaire ---
 

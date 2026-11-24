@@ -60,6 +60,12 @@ class GlossaryConfig(_Section):
     timeout_s: float = Field(gt=0)
 
 
+class SummaryConfig(_Section):
+    num_ctx: int = Field(ge=0)
+    timeout_s: float = Field(gt=0)
+    chunk_chars: int = Field(ge=1000)
+
+
 class OcrConfig(_Section):
     device: Literal["auto", "gpu", "cpu"]
     detection_model: str
@@ -117,6 +123,7 @@ class Settings(_Section):
     ollama: OllamaConfig
     translation: TranslationConfig
     glossary: GlossaryConfig
+    summary: SummaryConfig
     ocr: OcrConfig
     grouping: GroupingConfig
     cache: CacheConfig

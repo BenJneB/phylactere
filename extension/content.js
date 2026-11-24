@@ -49,6 +49,13 @@
   let upcoming = null;
   let notice = null; // { text, state } : message temporaire du badge (signalement)
   let noticeTimer = 0;
+  // Résumé « Précédemment… » (jalon 15) : encart affiché, état de la demande du résumé de
+  // l'épisode précédent (null, "loading", "done", "retry" : serveur arrêté, redemandé à la
+  // reprise de la file) et résumé de l'épisode courant déjà demandé d'avance.
+  let summaryEnabled = DEFAULTS.summary;
+  let previously = null;
+  let previouslyState = null;
+  let summaryRequested = false;
 
   // --- Badge d'état ---
   const badge = document.createElement("div");
@@ -60,6 +67,7 @@
     targetLang = s.targetLang;
     translateMode = s.translateMode;
     lookahead = clampLookahead(s.lookahead);
+    summaryEnabled = s.summary;
     reset();
   });
 
@@ -69,6 +77,11 @@
     if (changes.targetLang) targetLang = changes.targetLang.newValue;
     if (changes.translateMode) translateMode = changes.translateMode.newValue ?? DEFAULTS.translateMode;
     if (changes.lookahead) lookahead = clampLookahead(changes.lookahead.newValue);
+    if (changes.summary) {
+      summaryEnabled = changes.summary.newValue ?? DEFAULTS.summary;
+      if (summaryEnabled) loadPreviously();
+      else removePreviously();
+    }
     // Serveur, jeton, langue, modèle, activation : on retraduit la page.
     if (Object.keys(DEFAULTS).some((k) => k in changes && !LIVE_SETTINGS.includes(k))) reset();
     // Mode et avance : la fenêtre de lecture change, la file repart (en passant au mode
@@ -214,6 +227,7 @@
       else if (!sendUpcoming()) break;
     }
     maybeLoadUpcoming();
+    maybeSummarize();
     updateBadge();
   }
 
@@ -309,6 +323,7 @@
 
   function resume() {
     pause = null;
+    if (previouslyState === "retry") loadPreviously();
     pump();
   }
 
@@ -386,26 +401,34 @@
 
   // Les URL des images d'un épisode sont dans le HTML de sa page (rendu par le serveur de
   // Naver, #sectionContWide) : on applique la même sélection que scan().
+  async function episodeImageUrls(episodeId) {
+    const { url, doc } = await fetchEpisodePage(episodeId);
+    const root = doc.querySelector(VIEWER) || doc;
+    const ep = { seriesId: episode.seriesId, episodeId };
+    const urls = [];
+    for (const img of root.querySelectorAll("img")) {
+      const src = pageImageUrl(img, url, ep);
+      if (src && !urls.includes(src)) urls.push(src);
+    }
+    return urls;
+  }
+
+  // Document de l'épisode affiché. Après une navigation sans rechargement, les scripts de
+  // la page sont ceux du premier épisode chargé : le script d'état est alors relu dans le
+  // HTML de l'épisode affiché.
+  async function currentEpisodeDoc() {
+    return episode.episodeId === loadedEpisodeId
+      ? document
+      : (await fetchEpisodePage(episode.episodeId)).doc;
+  }
+
   async function loadUpcoming() {
     const gen = generation;
     let episodeId = null;
     let urls = [];
     try {
-      // Après une navigation sans rechargement, les scripts de la page sont ceux du premier
-      // épisode chargé : nextArticle est alors relu dans le HTML de l'épisode affiché.
-      const current = episode.episodeId === loadedEpisodeId
-        ? document
-        : (await fetchEpisodePage(episode.episodeId)).doc;
-      episodeId = nextEpisodeNumber(current);
-      if (episodeId) {
-        const { url, doc } = await fetchEpisodePage(episodeId);
-        const root = doc.querySelector(VIEWER) || doc;
-        const ep = { seriesId: episode.seriesId, episodeId };
-        for (const img of root.querySelectorAll("img")) {
-          const src = pageImageUrl(img, url, ep);
-          if (src && !urls.includes(src)) urls.push(src);
-        }
-      }
+      episodeId = nextEpisodeNumber(await currentEpisodeDoc());
+      if (episodeId) urls = await episodeImageUrls(episodeId);
     } catch (err) {
       console.warn("[Phylactère] Épisode suivant illisible :", err?.message || err);
       urls = [];
@@ -446,6 +469,130 @@
       up.failed++;
     }
     pump();
+  }
+
+  // --- Résumé « Précédemment… » (jalon 15) ---
+
+  // Numéro de l'épisode précédent, lu dans le script d'état de Naver comme nextArticle
+  // (vérifié sur la vraie page : prevArticle: { no: '65', blindInspection: false }).
+  // Script d'état présent sans prevArticle : premier épisode. Pas de script d'état du tout
+  // (Naver a changé sa page) : no - 1.
+  function prevEpisodeNumber(doc) {
+    let hasState = false;
+    for (const script of doc.querySelectorAll("script:not([src])")) {
+      const text = script.textContent;
+      if (!text.includes("__state__")) continue;
+      hasState = true;
+      const block = /prevArticle\s*:\s*\{([^}]*)\}/.exec(text)?.[1];
+      if (block === undefined) continue;
+      const no = /\bno\s*:\s*['"]?(\d+)/.exec(block)?.[1];
+      return no && no !== episode.episodeId ? no : null;
+    }
+    if (hasState) return null;
+    const no = Number(episode.episodeId) - 1;
+    return no >= 1 ? String(no) : null;
+  }
+
+  // À l'ouverture d'un épisode : résumé de l'épisode précédent, en priorité « prefetch ».
+  // Le plus souvent, il a été calculé d'avance à la fin de sa lecture (maybeSummarize) et
+  // le serveur le renvoie tout de suite. Rien en cache pour cet épisode (404) : pas d'encart.
+  async function loadPreviously() {
+    if (!enabled || !summaryEnabled || !episode || previously || previouslyState === "loading") return;
+    const gen = generation;
+    previouslyState = "loading";
+    let episodeId = null;
+    try {
+      episodeId = prevEpisodeNumber(await currentEpisodeDoc());
+    } catch (err) {
+      console.warn("[Phylactère] Épisode précédent introuvable :", err?.message || err);
+    }
+    if (gen !== generation) return;
+    if (!episodeId) {
+      previouslyState = "done";
+      return;
+    }
+    // Nombre d'images de l'épisode précédent : le serveur en déduit s'il a été lu en entier.
+    let imageCount;
+    try {
+      imageCount = (await episodeImageUrls(episodeId)).length || undefined;
+    } catch (err) {
+      console.info("[Phylactère] Images de l'épisode précédent illisibles :", err?.message || err);
+    }
+    if (gen !== generation) return;
+    const request = {
+      series_id: episode.seriesId, episode_id: episodeId, image_count: imageCount, priority: "prefetch"
+    };
+    let res;
+    // Délai dépassé : le serveur continue, une nouvelle demande rejoint sa tâche.
+    for (let attempt = 0; attempt <= MAX_TIMEOUT_RETRIES; attempt++) {
+      res = await ask({ type: "summary", request });
+      if (gen !== generation) return;
+      if (res.kind !== "timeout") break;
+    }
+    if (res.ok) {
+      previouslyState = "done";
+      if (summaryEnabled) showPreviously(res.data);
+      return;
+    }
+    // Serveur arrêté ou pas prêt : redemandé quand la file reprend.
+    previouslyState = ["down", "token", "busy"].includes(res.kind) ? "retry" : "done";
+    console.info("[Phylactère] Pas de résumé de l'épisode précédent :", res.error);
+  }
+
+  // Encart repliable au-dessus des images de l'épisode, dans le flux de la page.
+  function showPreviously(data) {
+    removePreviously();
+    const anchor = document.querySelector(VIEWER) || order[0]?.img;
+    if (!anchor?.parentNode) return;
+    const box = document.createElement("details");
+    box.className = "phy-previously";
+    box.open = true;
+    box.lang = targetLang;
+    const head = document.createElement("summary");
+    const title = document.createElement("span");
+    title.textContent = "Précédemment…" + (data.partial ? " (épisode lu en partie)" : "");
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "phy-close";
+    close.textContent = "×";
+    close.title = "Fermer le résumé";
+    close.setAttribute("aria-label", "Fermer le résumé");
+    close.addEventListener("click", (ev) => {
+      ev.preventDefault(); // pas de repli : l'encart disparaît
+      removePreviously();
+    });
+    head.append(title, close);
+    const text = document.createElement("p");
+    text.textContent = data.summary;
+    text.title = `Résumé par ${data.model}, à partir de ${data.bubbles} bulle(s) traduite(s)`;
+    box.append(head, text);
+    // Les clics ne remontent pas à la page (barre d'outils de la visionneuse de Naver).
+    box.addEventListener("click", (ev) => ev.stopPropagation());
+    anchor.parentNode.insertBefore(box, anchor);
+    previously = box;
+  }
+
+  function removePreviously() {
+    previously?.remove();
+    previously = null;
+  }
+
+  // Fin de lecture de l'épisode (même déclencheur que le préchargement de l'épisode
+  // suivant, dans les deux modes) : son résumé est demandé d'avance, en priorité
+  // « background », pour être prêt à l'ouverture du suivant. La réponse est ignorée.
+  function maybeSummarize() {
+    if (summaryRequested || !summaryEnabled || !episode || pause) return;
+    if (!episodeFinished() || readingProgress() < NEXT_EPISODE_PROGRESS) return;
+    summaryRequested = true;
+    const request = {
+      series_id: episode.seriesId, episode_id: episode.episodeId, image_count: order.length,
+      priority: "background"
+    };
+    ask({ type: "summary", request }).then((res) => {
+      if (!res.ok && res.kind !== "timeout") {
+        console.info("[Phylactère] Résumé de l'épisode impossible :", res.error);
+      }
+    });
   }
 
   // --- Signalement d'une bulle (Alt+clic) ---
@@ -827,7 +974,7 @@
   // --- Utilitaires ---
 
   function isOurs(node) {
-    return node === badge || !!node.closest?.(".phy-layer");
+    return node === badge || !!node.closest?.(".phy-layer, .phy-previously");
   }
 
   // Repart de zéro : autre épisode, réglages modifiés, extension (dés)activée.
@@ -841,9 +988,13 @@
     entries.clear();
     order = [];
     upcoming = null;
+    removePreviously();
+    previouslyState = null;
+    summaryRequested = false;
     episode = currentEpisode();
     updateBadge();
     scan();
+    loadPreviously();
   }
 
   function toggleHidden() {

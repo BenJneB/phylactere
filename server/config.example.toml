@@ -48,6 +48,18 @@ num_ctx = 16384
 # minute ; sur CPU, comptez une dizaine de secondes par tranche de 100 jetons du prompt.
 timeout_s = 600
 
+[summary]
+# Résumé « Précédemment… » de l'épisode précédent (jalon 15), à partir des traductions des
+# bulles en cache. Taille du contexte Ollama (jetons) pour cette requête : un épisode de
+# 100 à 200 bulles fait 1 000 à 3 000 jetons, au-delà des 2 048 à 4 096 qu'Ollama alloue
+# par défaut. 0 = valeur par défaut d'Ollama.
+num_ctx = 16384
+# Délai d'attente d'Ollama (secondes) pour cette requête, plus longue qu'une traduction.
+timeout_s = 600
+# Au-delà de ce nombre de caractères de bulles, l'épisode est résumé par tranches, puis
+# les résumés des tranches sont résumés (16 384 jetons ≈ 40 000 caractères en français).
+chunk_chars = 20000
+
 [ocr]
 # "auto" (GPU si PaddlePaddle GPU est installé et qu'une carte NVIDIA répond, sinon CPU),
 # "gpu" ou "cpu"

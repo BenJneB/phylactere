@@ -12,6 +12,10 @@
   et langue cible, indépendant du modèle et de PROMPT_VERSION. Appliquées à la lecture
   (réponse de /translate, contexte, propositions de glossaire) : les traductions en cache
   restent celles du modèle. Ni ``clear`` ni la purge n'y touchent.
+- Résumés (jalon 15) : un résumé par épisode, langue cible et modèle, avec l'empreinte des
+  bulles résumées (``source``) pour savoir s'il est à refaire. Ni ``clear`` ni la purge n'y
+  touchent : quelques centaines d'octets par épisode, et le résumé reste servi quand les
+  traductions de l'épisode ne sont plus en cache.
 
 sqlite3 est synchrone : les appels passent par un thread (asyncio.to_thread), protégés par
 un verrou (une seule connexion).
@@ -73,6 +77,22 @@ CREATE TABLE IF NOT EXISTS correction (
     translated TEXT
 );
 CREATE INDEX IF NOT EXISTS correction_image ON correction (image, target_lang);
+CREATE TABLE IF NOT EXISTS summary (
+    series_id TEXT NOT NULL,
+    episode_id TEXT NOT NULL,
+    target_lang TEXT NOT NULL,
+    model TEXT NOT NULL,
+    -- SUMMARY_VERSION du prompt, et empreinte des bulles résumées : résumé à refaire si
+    -- l'une ou l'autre a changé.
+    version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    text TEXT NOT NULL,
+    partial INTEGER NOT NULL,
+    images INTEGER NOT NULL,
+    bubbles INTEGER NOT NULL,
+    created REAL NOT NULL,
+    PRIMARY KEY (series_id, episode_id, target_lang, model)
+);
 """
 
 # Tables purgées quand le cache dépasse sa taille maximale (pas les glossaires).
@@ -142,6 +162,18 @@ class TranslatedBlock(BaseModel):
 class TranslationResult(BaseModel):
     blocks: list[TranslatedBlock]
     image_size: ImageSize
+
+
+class StoredSummary(BaseModel):
+    """Résumé d'un épisode en cache (jalon 15)."""
+
+    text: str
+    version: str
+    # Empreinte des bulles résumées (voir Pipeline.summary).
+    source: str
+    partial: bool
+    images: int
+    bubbles: int
 
 
 class Correction(BaseModel):
@@ -350,7 +382,7 @@ class Cache:
     def stats(self) -> dict[str, int]:
         counts = {
             table: self._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("ocr", "translation", "glossary", "correction")
+            for table in ("ocr", "translation", "glossary", "correction", "summary")
         }
         return {
             "size_bytes": self._size(),
@@ -359,6 +391,7 @@ class Cache:
             "translations": counts["translation"],
             "glossaries": counts["glossary"],
             "corrections": counts["correction"],
+            "summaries": counts["summary"],
         }
 
     # --- OCR ---
@@ -518,6 +551,95 @@ class Cache:
                     return pairs
         return pairs
 
+    @_threaded
+    def episode_bubbles(
+        self, series_id: str, episode_id: str, target_lang: str, model: str
+    ) -> list[tuple[int, list[str]]]:
+        """Traductions des bulles de l'épisode en cache, corrections appliquées : une entrée
+        par image traduite, (index, textes dans l'ordre de lecture), par index croissant.
+
+        Celles de ``model`` ; à défaut (épisode lu avec un autre modèle), celles du modèle
+        qui a traduit le plus d'images de l'épisode, le plus récent en cas d'égalité."""
+        rows = self._db.execute(
+            "SELECT model, image_index, created, key, result FROM translation"
+            " WHERE series_id = ? AND episode_id = ? AND target_lang = ?"
+            " ORDER BY image_index, created DESC, rowid DESC",
+            (series_id, episode_id, target_lang),
+        ).fetchall()
+        if not rows:
+            return []
+        by_model: dict[str, list[tuple]] = {}
+        for row in rows:
+            by_model.setdefault(row[0], []).append(row)
+        if model not in by_model:
+            model = max(
+                by_model,
+                key=lambda m: (
+                    len({row[1] for row in by_model[m]}),
+                    max(row[2] for row in by_model[m]),
+                ),
+            )
+        images: list[tuple[int, list[str]]] = []
+        for _, index, _, key, raw in by_model[model]:
+            # Une image traduite avec plusieurs versions du prompt : la plus récente seule.
+            if images and images[-1][0] == index:
+                continue
+            blocks = self._corrected_blocks(key, target_lang, raw)
+            images.append((index, [block.translated for block in blocks]))
+        return images
+
+    # --- Résumés (jalon 15) ---
+
+    @_threaded
+    def get_summary(
+        self, series_id: str, episode_id: str, target_lang: str, model: str
+    ) -> StoredSummary | None:
+        row = self._db.execute(
+            "SELECT text, version, source, partial, images, bubbles FROM summary"
+            " WHERE series_id = ? AND episode_id = ? AND target_lang = ? AND model = ?",
+            (series_id, episode_id, target_lang, model),
+        ).fetchone()
+        if row is None:
+            return None
+        text, version, source, partial, images, bubbles = row
+        return StoredSummary(
+            text=text,
+            version=version,
+            source=source,
+            partial=bool(partial),
+            images=images,
+            bubbles=bubbles,
+        )
+
+    @_threaded
+    def put_summary(
+        self,
+        series_id: str,
+        episode_id: str,
+        target_lang: str,
+        model: str,
+        summary: StoredSummary,
+    ) -> None:
+        self._db.execute(
+            "INSERT OR REPLACE INTO summary (series_id, episode_id, target_lang, model,"
+            " version, source, text, partial, images, bubbles, created)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                series_id,
+                episode_id,
+                target_lang,
+                model,
+                summary.version,
+                summary.source,
+                summary.text,
+                int(summary.partial),
+                summary.images,
+                summary.bubbles,
+                time.time(),
+            ),
+        )
+        self._db.commit()
+
     # --- Corrections (jalon 14) ---
 
     def _corrections(self, image: str, target_lang: str) -> list[Correction]:
@@ -643,8 +765,8 @@ class Cache:
 
     @_threaded
     def clear(self, series_id: str | None = None) -> int:
-        """Vide le cache (OCR et traductions ; les glossaires et les corrections sont
-        conservés)."""
+        """Vide le cache (OCR et traductions ; les glossaires, les corrections et les
+        résumés sont conservés)."""
         if series_id is None:
             removed = self._db.execute("DELETE FROM translation").rowcount
             removed += self._db.execute("DELETE FROM ocr").rowcount

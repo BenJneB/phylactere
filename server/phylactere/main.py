@@ -42,6 +42,8 @@ from phylactere.pipeline import (
     Stats,
     SuggestRequest,
     SuggestResponse,
+    SummaryRequest,
+    SummaryResponse,
     TranslateRequest,
     TranslateResponse,
 )
@@ -194,6 +196,12 @@ def create_app(
     async def retranslate(request: Request, body: RetranslateRequest) -> TranslatedBlock:
         """Retraduit une bulle (Maj+clic dans l'extension) et la remplace dans le cache."""
         return await request.app.state.pipeline.retranslate(body)
+
+    @protected.post("/summary")
+    async def summary(request: Request, body: SummaryRequest) -> SummaryResponse:
+        """Résumé « Précédemment… » d'un épisode, à partir des bulles traduites en cache.
+        404 si l'épisode n'a pas été lu avec Phylactère."""
+        return await request.app.state.pipeline.summary(body)
 
     @protected.put("/correction")
     async def put_correction(request: Request, body: CorrectionRequest) -> Correction:

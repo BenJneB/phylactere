@@ -13,11 +13,13 @@ const DEFAULTS = {
   // "episode" : tout l'épisode part dès l'ouverture (images visibles d'abord) ;
   // "scroll" : seulement les images visibles et les `lookahead` suivantes.
   translateMode: "episode",
-  lookahead: 4 // images d'avance en mode "scroll" (de 1 à 20)
+  lookahead: 4, // images d'avance en mode "scroll" (de 1 à 20)
+  // Encart « Précédemment… » : résumé de l'épisode précédent en tête d'épisode (jalon 15).
+  summary: true
 };
 
 // Réglages appliqués à chaud par content.js, sans retraduire la page.
-const LIVE_SETTINGS = ["translateMode", "lookahead", "retranslateModel"];
+const LIVE_SETTINGS = ["translateMode", "lookahead", "retranslateModel", "summary"];
 
 // Réglages enregistrés, complétés par les valeurs par défaut.
 function settings() {
