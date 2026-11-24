@@ -26,6 +26,8 @@
   cursor: pointer;
   /* Maj+clic (retraduire) sélectionnerait sinon le texte de la page */
   user-select: none;
+  /* Retours à la ligne saisis dans une correction (Maj+Entrée) */
+  white-space: pre-line;
   transition: opacity 0.15s;
 }
 /* Clic sur une bulle : affiche le texte original dessous */
@@ -52,6 +54,17 @@
 /* Alt+clic : bulle signalée (envoi en cours, puis enregistrée par le serveur) */
 .phy-bubble[data-report="sending"] { outline: 2px dashed #9aa3b5; outline-offset: 1px; }
 .phy-bubble[data-report="done"] { outline: 2px dashed #d33; outline-offset: 1px; }
+
+/* Bulle corrigée à la main (jalon 14) : petit liseré vert à gauche */
+.phy-bubble[data-corrected] { border-left: 3px solid #2a9d5c; }
+/* Ctrl+clic : bulle en cours de correction (et envoi de la correction) */
+.phy-bubble[contenteditable="true"] {
+  user-select: text;
+  cursor: text;
+  outline: 2px solid #2a9d5c;
+  outline-offset: 1px;
+}
+.phy-bubble[data-correct="sending"] { outline: 2px dashed #2a9d5c; outline-offset: 1px; }
 
 /* Maj+clic (une bulle) ou Maj+Alt+T (toute l'image) : retraduction en cours */
 .phy-bubble[data-retranslate="sending"],

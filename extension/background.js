@@ -12,6 +12,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   const handlers = {
     translate: () => translate(msg.request),
     retranslate: () => retranslate(msg.request),
+    correct: () => correct(msg.request),
     report: () => report(msg.request),
     "report-cancel": () => call(`/report/${encodeURIComponent(msg.id)}`, { method: "DELETE" }),
     health: () => health(),
@@ -49,6 +50,16 @@ async function retranslate(request) {
   const s = await settings();
   const body = withRetranslateModel(request, s);
   return call("/retranslate", { method: "POST", body, timeout: TRANSLATE_TIMEOUT_MS, onTimeout: "error", s });
+}
+
+// Ctrl+clic puis Entrée (jalon 14) : texte saisi → PUT /correction ; texte vide → la
+// correction est effacée (DELETE /correction) et la traduction du modèle revient.
+async function correct(request) {
+  const s = await settings();
+  const { text, translated, ...target } = request;
+  const erase = !text.trim();
+  const body = withLangModel(erase ? target : { ...target, text, translated }, s);
+  return call("/correction", { method: erase ? "DELETE" : "PUT", body, s });
 }
 
 function health() {

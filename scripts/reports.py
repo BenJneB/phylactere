@@ -1,11 +1,14 @@
-"""Rapport HTML des bulles signalées (Alt+clic dans l'extension, jalon 11).
+"""Rapport HTML des bulles signalées (Alt+clic dans l'extension, jalon 11) et des bulles
+corrigées à la main (Ctrl+clic, jalon 14).
 
-Lit les signalements (``<id>.json`` + ``<id>.png``) du dossier des signalements et écrit
-``index.html`` à côté d'eux (les découpes y sont liées, pas recopiées). Depuis server/ :
+Lit les signalements (``<id>.json`` + ``<id>.png``) du dossier des signalements et les
+corrections du cache SQLite (en lecture seule : le serveur peut tourner), puis écrit
+``index.html`` dans le dossier des signalements (les découpes y sont liées, pas recopiées).
+Les corrections sont le meilleur corpus pour régler le prompt. Depuis server/ :
 
-    uv run python ../scripts/reports.py            # dossier par défaut
+    uv run python ../scripts/reports.py            # dossier et cache par défaut
     uv run python ../scripts/reports.py --open     # et ouvre le rapport dans le navigateur
-    uv run python ../scripts/reports.py --dir <dossier>
+    uv run python ../scripts/reports.py --dir <dossier> --cache <cache.sqlite3>
 
 Dossier par défaut : Windows %LOCALAPPDATA%\\phylactere\\reports,
 Linux ~/.local/share/phylactere/reports (ou $PHYLACTERE_DATA_DIR/reports).
@@ -15,10 +18,12 @@ import argparse
 import json
 import sys
 import webbrowser
+from datetime import datetime
 from html import escape
 from pathlib import Path
 
-from phylactere.config import reports_dir
+from phylactere.cache import read_corrections
+from phylactere.config import load_settings, reports_dir
 
 STYLE = """
 body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; color: #1d2a44; background: #f6f7f9; }
@@ -30,6 +35,8 @@ h1 { font-size: 20px; }
 .text { font-size: 16px; margin: 6px 0; }
 table { border-collapse: collapse; font-size: 12px; margin-top: 6px; }
 td, th { border: 1px solid #dde; padding: 2px 6px; text-align: left; }
+.machine { color: #8a5a5a; text-decoration: line-through; }
+.fixed { color: #1f7a4a; }
 """
 
 
@@ -45,6 +52,33 @@ def load_reports(directory: Path) -> list[dict]:
     return reports
 
 
+def episode_url(series_id: str, episode_id: str) -> str:
+    return f"https://comic.naver.com/webtoon/detail?titleId={series_id}&no={episode_id}"
+
+
+def render_correction(row: dict) -> str:
+    created = datetime.fromtimestamp(row["created"]).astimezone().isoformat(timespec="seconds")
+    box = row["box"]
+    episode = episode_url(row["series_id"], row["episode_id"])
+    machine = row.get("translated")
+    machine_html = (
+        f'<div class="text machine">{escape(machine)}</div>'
+        if machine
+        else "<p class='meta'>Traduction du modèle inconnue.</p>"
+    )
+    return f"""<div class="report">
+<div>
+<div class="meta">{escape(created)} · <a href="{escape(episode)}">série
+{escape(row["series_id"])}, épisode {escape(row["episode_id"])}</a> · image
+<a href="{escape(row["image_url"])}">#{row["image_index"]}</a> · {escape(row.get("model") or "")}
+· {escape(row["target_lang"])} · boîte {box["x"]}, {box["y"]}, {box["w"]} × {box["h"]}</div>
+<div class="text">{escape(row["original"])}</div>
+{machine_html}
+<div class="text fixed"><b>{escape(row["text"])}</b></div>
+</div>
+</div>"""
+
+
 def render_report(report: dict) -> str:
     bubble = report.get("bubble", {})
     lines = "".join(
@@ -58,10 +92,7 @@ def render_report(report: dict) -> str:
         if lines
         else "<p class='meta'>Bulle non retrouvée dans le résultat OCR : pas de lignes.</p>"
     )
-    episode = (
-        f"https://comic.naver.com/webtoon/detail?titleId={report['series_id']}"
-        f"&no={report['episode_id']}"
-    )
+    episode = episode_url(report["series_id"], report["episode_id"])
     return f"""<div class="report">
 <img src="{escape(report.get("crop", ""))}" alt="découpe de la bulle">
 <div>
@@ -77,7 +108,7 @@ def render_report(report: dict) -> str:
 </div>"""
 
 
-def render_html(reports: list[dict]) -> str:
+def render_html(reports: list[dict], corrections: list[dict] = ()) -> str:
     """Un signalement incomplet (JSON écrit à moitié, modifié à la main) est ignoré avec un
     avertissement, sans empêcher le rapport."""
     parts = []
@@ -88,11 +119,17 @@ def render_html(reports: list[dict]) -> str:
             name = report.get("id", "?") if isinstance(report, dict) else "?"
             print(f"Ignoré : {name} (champ manquant ou invalide : {exc!r})", file=sys.stderr)
     body = "\n".join(parts) or "<p>Aucun signalement.</p>"
+    fixed = "\n".join(render_correction(row) for row in corrections) or (
+        "<p>Aucune correction.</p>"
+    )
     return f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><title>Phylactère · bulles signalées</title>
 <style>{STYLE}</style></head>
 <body><h1>Bulles signalées ({len(parts)})</h1>
 {body}
+<h1>Bulles corrigées ({len(corrections)})</h1>
+<p class="meta">Original, traduction du modèle (barrée), correction.</p>
+{fixed}
 </body></html>
 """
 
@@ -100,16 +137,21 @@ def render_html(reports: list[dict]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--dir", type=Path, default=None, help="dossier des signalements")
+    parser.add_argument(
+        "--cache", type=Path, default=None, help="cache SQLite (corrections des bulles)"
+    )
     parser.add_argument("--open", action="store_true", help="ouvrir le rapport")
     args = parser.parse_args()
 
     directory = args.dir or reports_dir()
-    if not directory.is_dir():
-        sys.exit(f"Aucun signalement : {directory} n'existe pas.")
+    corrections = read_corrections(args.cache or load_settings().cache.resolved_path())
+    if not directory.is_dir() and not corrections:
+        sys.exit(f"Aucun signalement ({directory} n'existe pas) ni aucune correction.")
+    directory.mkdir(parents=True, exist_ok=True)
     reports = load_reports(directory)
     out = directory / "index.html"
-    out.write_text(render_html(reports), encoding="utf-8")
-    print(f"{len(reports)} signalement(s) : {out}")
+    out.write_text(render_html(reports, corrections), encoding="utf-8")
+    print(f"{len(reports)} signalement(s), {len(corrections)} correction(s) : {out}")
     if args.open:
         webbrowser.open(out.as_uri())
 

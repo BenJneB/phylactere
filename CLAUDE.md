@@ -25,7 +25,7 @@ uv run python -m phylactere --check-ocr   # charge PaddleOCR et lit tests/data/k
 PHYLACTERE_CONFIG=config.dev.toml uv run python ../scripts/translate_samples.py ../samples/729047-66 --limit 20
 # Banc d'essai (jalon 4, serveur arrêté) : rapport HTML dans samples/bench/
 uv run python ../scripts/bench.py ../samples/729047-66 --models qwen3.5:4b --variants base,sans-contexte --limit 6
-# Rapport HTML des bulles signalées (Alt+clic) : ~/.local/share/phylactere/reports/index.html
+# Rapport HTML des bulles signalées (Alt+clic) et corrigées (Ctrl+clic) : ~/.local/share/phylactere/reports/index.html
 uv run python ../scripts/reports.py --open
 uv run ruff check . && uv run ruff format .
 
@@ -76,7 +76,7 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 11 : confort (signaler une bulle, préchargement de l'épisode suivant, délai dépassé côté extension)
 - [x] Jalon 12 : cache borné et statistiques
 - [x] Jalon 13 : retraduire une bulle ou une image
-- [ ] Jalon 14 : corriger une bulle à la main
+- [x] Jalon 14 : corriger une bulle à la main
 - [ ] Jalon 15 : résumé « Précédemment… »
 - Jalon 16 : brouillon rapide puis version améliorée — hors périmètre pour le moment (détails conservés dans `docs/SPEC.md`, section 10)
 - [ ] Jalon 17 : export d'un épisode traduit en PDF

@@ -28,13 +28,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from phylactere import __version__
-from phylactere.cache import Cache, GlossaryEntry, TranslatedBlock
+from phylactere.cache import Cache, Correction, GlossaryEntry, TranslatedBlock
 from phylactere.config import Settings, load_settings, reports_dir
 from phylactere.debug import render_debug
 from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError, decode_image
 from phylactere.ocr import OcrEngine
 from phylactere.pipeline import (
+    CorrectionRequest,
+    CorrectionTarget,
     Pipeline,
     RetranslateRequest,
     Stats,
@@ -192,6 +194,17 @@ def create_app(
     async def retranslate(request: Request, body: RetranslateRequest) -> TranslatedBlock:
         """Retraduit une bulle (Maj+clic dans l'extension) et la remplace dans le cache."""
         return await request.app.state.pipeline.retranslate(body)
+
+    @protected.put("/correction")
+    async def put_correction(request: Request, body: CorrectionRequest) -> Correction:
+        """Correction d'une bulle à la main (Ctrl+clic dans l'extension). Indépendante du
+        modèle et de la version du prompt ; « Vider le cache » ne l'efface pas."""
+        return await request.app.state.pipeline.correct(body)
+
+    @protected.delete("/correction")
+    async def delete_correction(request: Request, body: CorrectionTarget) -> dict:
+        """Efface la correction d'une bulle : la traduction du modèle revient."""
+        return {"removed": await request.app.state.pipeline.uncorrect(body)}
 
     @protected.post("/report")
     async def report(request: Request, body: ReportRequest) -> ReportResponse:

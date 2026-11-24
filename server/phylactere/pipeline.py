@@ -5,12 +5,13 @@ import json
 import logging
 import time
 from collections import OrderedDict, deque
+from typing import Annotated
 
 import httpx
 from PIL import Image
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
-from phylactere.cache import Cache, TranslatedBlock, TranslationResult, sha1
+from phylactere.cache import Cache, Correction, TranslatedBlock, TranslationResult, sha1
 from phylactere.config import Settings, reports_dir
 from phylactere.errors import ServiceError
 from phylactere.fetch import FetchError, check_url, decode_image, fetch_bytes
@@ -56,6 +57,21 @@ class RetranslateRequest(ImageRequest, RetranslateModel):
     box: Box
 
 
+class CorrectionTarget(ImageRequest):
+    """Bulle telle que l'extension l'affiche (jalon 14) : la correction est rangée par image
+    et langue cible, et retrouvée par sa boîte et son original."""
+
+    box: Box
+    original: str = Field(max_length=5000)
+
+
+class CorrectionRequest(CorrectionTarget):
+    # Texte saisi : vide, l'extension efface la correction (DELETE /correction).
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)]
+    # Traduction du modèle remplacée (corpus des corrections, scripts/reports.py).
+    translated: str | None = Field(default=None, max_length=5000)
+
+
 class TranslateResponse(TranslationResult):
     cached: bool
     timings_ms: dict[str, int]
@@ -82,6 +98,7 @@ class CacheStats(BaseModel):
     ocr: int
     translations: int
     glossaries: int
+    corrections: int
 
 
 class Stats(BaseModel):
@@ -318,6 +335,7 @@ class Pipeline:
             if cached is not None:
                 self._served += 1
                 self._served_cached += 1
+                cached = await self._cache.corrected(request.image_url, lang, cached)
                 return TranslateResponse(**dict(cached), cached=True, timings_ms=timings)
 
         ocr = await self._ocr_result(request, request.priority, timings)
@@ -379,6 +397,9 @@ class Pipeline:
             timings,
         )
         self._served += 1
+        # Corrections appliquées à la réponse seulement : le cache garde la traduction du
+        # modèle, qui revient si la correction est effacée.
+        result = await self._cache.corrected(request.image_url, lang, result)
         return TranslateResponse(**dict(result), cached=False, timings_ms=timings)
 
     # --- Retraduction d'une bulle (jalon 13) ---
@@ -400,10 +421,15 @@ class Pipeline:
                 "rechargez la page.",
                 404,
             )
+        # Corrections appliquées : une bulle corrigée n'est pas retraduite, et les autres
+        # bulles passent au modèle sous leur forme corrigée.
+        cached = await self._cache.corrected(request.image_url, lang, cached)
         index = match_box([block.box for block in cached.blocks], request.box)
         if index is None:
             raise ServiceError("Bulle introuvable dans la traduction en cache.", 404)
         block = cached.blocks[index]
+        if block.corrected:
+            raise ServiceError("Bulle corrigée : effacez la correction d'abord.", 409)
         neighbors = [
             (other.original, other.translated)
             for i, other in enumerate(cached.blocks)
@@ -445,6 +471,45 @@ class Pipeline:
             "" if stored else " (pas mise en cache : traduction de l'image modifiée)",
         )
         return updated
+
+    # --- Corrections (jalon 14) ---
+
+    async def correct(self, request: CorrectionRequest) -> Correction:
+        """Enregistre le texte saisi pour une bulle (Ctrl+clic dans l'extension)."""
+        lang, model = self._check(request)
+        correction = Correction(box=request.box, original=request.original, text=request.text)
+        await self._cache.put_correction(
+            request.image_url,
+            request.series_id,
+            request.episode_id,
+            request.index,
+            lang,
+            correction,
+            model,
+            request.translated,
+        )
+        logger.info(
+            "Bulle de l'image %s/%s #%d corrigée.",
+            request.series_id,
+            request.episode_id,
+            request.index,
+        )
+        return correction
+
+    async def uncorrect(self, request: CorrectionTarget) -> int:
+        """Efface la correction d'une bulle : la traduction du modèle revient."""
+        lang, _ = self._check(request)
+        removed = await self._cache.delete_correction(
+            request.image_url, lang, request.box, request.original
+        )
+        logger.info(
+            "Correction effacée sur l'image %s/%s #%d (%d).",
+            request.series_id,
+            request.episode_id,
+            request.index,
+            removed,
+        )
+        return removed
 
     # --- Propositions de glossaire ---
 

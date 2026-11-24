@@ -8,6 +8,10 @@
   des images qui mentionnent un terme ajouté, retiré ou modifié.
 - Taille bornée (jalon 12) : au-delà de ``max_bytes``, les entrées OCR et traductions les
   moins récemment utilisées (colonne ``used``) sont supprimées ; jamais les glossaires.
+- Corrections (jalon 14) : texte saisi à la main pour une bulle, par image (sha1 de l'URL)
+  et langue cible, indépendant du modèle et de PROMPT_VERSION. Appliquées à la lecture
+  (réponse de /translate, contexte, propositions de glossaire) : les traductions en cache
+  restent celles du modèle. Ni ``clear`` ni la purge n'y touchent.
 
 sqlite3 est synchrone : les appels passent par un thread (asyncio.to_thread), protégés par
 un verrou (une seule connexion).
@@ -52,6 +56,23 @@ CREATE TABLE IF NOT EXISTS glossary (
     series_id TEXT PRIMARY KEY,
     entries TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS correction (
+    id INTEGER PRIMARY KEY,
+    image TEXT NOT NULL,
+    target_lang TEXT NOT NULL,
+    box TEXT NOT NULL,
+    original TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created REAL NOT NULL,
+    -- Pour scripts/reports.py : où est la bulle, et ce que le modèle avait proposé.
+    image_url TEXT NOT NULL,
+    series_id TEXT NOT NULL,
+    episode_id TEXT NOT NULL,
+    image_index INTEGER NOT NULL,
+    model TEXT,
+    translated TEXT
+);
+CREATE INDEX IF NOT EXISTS correction_image ON correction (image, target_lang);
 """
 
 # Tables purgées quand le cache dépasse sa taille maximale (pas les glossaires).
@@ -64,6 +85,10 @@ PURGE_TARGET = 0.9
 PURGE_BATCH = 50
 # Valeur de PRAGMA auto_vacuum pour le mode INCREMENTAL.
 AUTO_VACUUM_INCREMENTAL = 2
+# Une correction s'applique à une bulle de boîte égale, sinon à la bulle de même original
+# (sans espaces) qui la recouvre le plus, si le recouvrement atteint cette part de la plus
+# grande des deux boîtes : l'OCR a pu changer légèrement (réglages, voisines).
+CORRECTION_OVERLAP = 0.5
 
 
 def sha1(text: str) -> str:
@@ -108,11 +133,94 @@ class TranslatedBlock(BaseModel):
     # Modèle qui a produit la traduction (jalon 13 : une bulle retraduite peut venir d'un
     # autre modèle que celui de la clé de cache) ; absent des traductions plus anciennes.
     model: str | None = None
+    # Bulle corrigée à la main (jalon 14) : ``translated`` est la correction, ``machine``
+    # la traduction du modèle, qui revient si la correction est effacée.
+    corrected: bool = False
+    machine: str | None = None
 
 
 class TranslationResult(BaseModel):
     blocks: list[TranslatedBlock]
     image_size: ImageSize
+
+
+class Correction(BaseModel):
+    box: Box
+    original: str
+    text: str
+
+
+def match_correction(
+    bubbles: list[tuple[Box, str]], correction: Correction, exclude: set[int] = frozenset()
+) -> int | None:
+    """Indice de la bulle ``(boîte, original)`` à laquelle s'applique la correction : boîte
+    égale, sinon même original (sans espaces) et plus grand recouvrement, s'il atteint
+    CORRECTION_OVERLAP de la plus grande des deux boîtes. Les indices ``exclude`` (bulles
+    déjà corrigées) sont ignorés."""
+    candidates = [(i, box, text) for i, (box, text) in enumerate(bubbles) if i not in exclude]
+    for i, box, _ in candidates:
+        if box == correction.box:
+            return i
+    original = compact(correction.original)
+    best, best_ratio = None, 0.0
+    for i, box, text in candidates:
+        if compact(text) != original:
+            continue
+        largest = max(box.area, correction.box.area)
+        ratio = box.intersection_area(correction.box) / largest if largest else 0.0
+        if ratio > best_ratio:
+            best, best_ratio = i, ratio
+    return best if best_ratio >= CORRECTION_OVERLAP else None
+
+
+def apply_corrections(
+    blocks: list[TranslatedBlock], corrections: list[Correction]
+) -> list[TranslatedBlock]:
+    """Remplace le texte des bulles corrigées (``corrected``, traduction du modèle gardée
+    dans ``machine``). Une correction qui ne retrouve pas sa bulle est ignorée."""
+    if not corrections:
+        return blocks
+    out = list(blocks)
+    bubbles = [(block.box, block.original) for block in blocks]
+    taken: set[int] = set()
+    for correction in corrections:
+        index = match_correction(bubbles, correction, taken)
+        if index is None:
+            continue
+        taken.add(index)
+        block = out[index]
+        out[index] = block.model_copy(
+            update={"translated": correction.text, "corrected": True, "machine": block.translated}
+        )
+    return out
+
+
+def image_hash(translation_key: str) -> str:
+    """Empreinte de l'URL de l'image, en tête de la clé d'une traduction."""
+    return translation_key.split(":", 1)[0]
+
+
+def read_corrections(path: Path) -> list[dict]:
+    """Toutes les corrections de la base ``path``, de la plus récente à la plus ancienne
+    (scripts/reports.py). Base ouverte en lecture seule : le serveur peut tourner. Pas de
+    base, ou base d'avant le jalon 14 : liste vide."""
+    if not path.is_file():
+        return []
+    db = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    try:
+        cursor = db.execute(
+            "SELECT target_lang, box, original, text, created, image_url, series_id,"
+            " episode_id, image_index, model, translated FROM correction ORDER BY created DESC"
+        )
+        names = [column[0] for column in cursor.description]
+        rows = [dict(zip(names, row, strict=True)) for row in cursor]
+    except sqlite3.OperationalError:  # pas de table correction
+        return []
+    finally:
+        db.close()
+    for row in rows:
+        row["box"] = json.loads(row["box"])
+    return rows
 
 
 def _threaded(func):
@@ -242,7 +350,7 @@ class Cache:
     def stats(self) -> dict[str, int]:
         counts = {
             table: self._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("ocr", "translation", "glossary")
+            for table in ("ocr", "translation", "glossary", "correction")
         }
         return {
             "size_bytes": self._size(),
@@ -250,6 +358,7 @@ class Cache:
             "ocr": counts["ocr"],
             "translations": counts["translation"],
             "glossaries": counts["glossary"],
+            "corrections": counts["correction"],
         }
 
     # --- OCR ---
@@ -360,19 +469,19 @@ class Cache:
         if limit <= 0:
             return []
         rows = self._db.execute(
-            "SELECT image_index, result FROM translation"
+            "SELECT image_index, key, result FROM translation"
             " WHERE series_id = ? AND episode_id = ? AND target_lang = ? AND model = ?"
             " AND image_index < ? ORDER BY image_index DESC, created DESC, rowid DESC",
             (series_id, episode_id, target_lang, model, image_index),
-        )
+        ).fetchall()
         pairs: list[tuple[str, str]] = []
         seen: set[int] = set()
-        for index, raw in rows:
+        for index, key, raw in rows:
             # Une image traduite avec plusieurs versions du prompt : la plus récente seule.
             if index in seen:
                 continue
             seen.add(index)
-            blocks = TranslationResult.model_validate_json(raw).blocks
+            blocks = self._corrected_blocks(key, target_lang, raw)
             for block in reversed(blocks):
                 pairs.append((block.original, block.translated))
                 if len(pairs) == limit:
@@ -386,7 +495,7 @@ class Cache:
         """Bulles traduites en cache de la série (original, traduction), sans doublon : celles
         de ``episode_id`` d'abord, puis des épisodes les plus récemment traduits."""
         rows = self._db.execute(
-            "SELECT episode_id, image_index, created, result FROM translation"
+            "SELECT episode_id, image_index, created, key, result FROM translation"
             " WHERE series_id = ? AND target_lang = ?",
             (series_id, target_lang),
         ).fetchall()
@@ -394,13 +503,13 @@ class Cache:
         # dans un épisode, l'ordre de lecture. Une image traduite par plusieurs modèles
         # n'est comptée qu'une fois (même original).
         latest: dict[str, float] = {}
-        for episode, _, created, _ in rows:
+        for episode, _, created, _, _ in rows:
             latest[episode] = max(created, latest.get(episode, 0.0))
         rows.sort(key=lambda r: (r[0] != episode_id, -latest[r[0]], r[0], r[1], -r[2]))
         pairs: list[tuple[str, str]] = []
         seen: set[str] = set()
-        for *_, raw in rows:
-            for block in TranslationResult.model_validate_json(raw).blocks:
+        for *_, key, raw in rows:
+            for block in self._corrected_blocks(key, target_lang, raw):
                 if block.original in seen:
                     continue
                 seen.add(block.original)
@@ -408,6 +517,94 @@ class Cache:
                 if len(pairs) == limit:
                     return pairs
         return pairs
+
+    # --- Corrections (jalon 14) ---
+
+    def _corrections(self, image: str, target_lang: str) -> list[Correction]:
+        rows = self._db.execute(
+            "SELECT box, original, text FROM correction WHERE image = ? AND target_lang = ?"
+            " ORDER BY id",
+            (image, target_lang),
+        )
+        return [
+            Correction(box=Box.model_validate_json(box), original=original, text=text)
+            for box, original, text in rows
+        ]
+
+    def _corrected_blocks(self, key: str, target_lang: str, raw: str) -> list[TranslatedBlock]:
+        """Bulles d'une traduction en cache (``raw``), corrections appliquées."""
+        blocks = TranslationResult.model_validate_json(raw).blocks
+        return apply_corrections(blocks, self._corrections(image_hash(key), target_lang))
+
+    @_threaded
+    def corrected(
+        self, image_url: str, target_lang: str, result: TranslationResult
+    ) -> TranslationResult:
+        """``result`` avec les corrections de l'image appliquées."""
+        corrections = self._corrections(sha1(image_url), target_lang)
+        return result.model_copy(update={"blocks": apply_corrections(result.blocks, corrections)})
+
+    def _delete_correction(self, image: str, target_lang: str, box: Box, original: str) -> int:
+        """Supprime les corrections qui s'appliquent à la bulle ``(box, original)``."""
+        rows = self._db.execute(
+            "SELECT id, box, original, text FROM correction WHERE image = ? AND target_lang = ?",
+            (image, target_lang),
+        ).fetchall()
+        stale = [
+            (row_id,)
+            for row_id, raw_box, row_original, text in rows
+            if match_correction(
+                [(box, original)],
+                Correction(box=Box.model_validate_json(raw_box), original=row_original, text=text),
+            )
+            == 0
+        ]
+        self._db.executemany("DELETE FROM correction WHERE id = ?", stale)
+        return len(stale)
+
+    @_threaded
+    def put_correction(
+        self,
+        image_url: str,
+        series_id: str,
+        episode_id: str,
+        image_index: int,
+        target_lang: str,
+        correction: Correction,
+        model: str | None = None,
+        translated: str | None = None,
+    ) -> None:
+        """Enregistre la correction d'une bulle ; remplace celle qui s'y appliquait déjà.
+        ``model`` et ``translated`` : modèle affiché et sa traduction (corpus des corrections)."""
+        image = sha1(image_url)
+        self._delete_correction(image, target_lang, correction.box, correction.original)
+        self._db.execute(
+            "INSERT INTO correction (image, target_lang, box, original, text, created,"
+            " image_url, series_id, episode_id, image_index, model, translated)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                image,
+                target_lang,
+                correction.box.model_dump_json(),
+                correction.original,
+                correction.text,
+                time.time(),
+                image_url,
+                series_id,
+                episode_id,
+                image_index,
+                model,
+                translated,
+            ),
+        )
+        self._db.commit()
+
+    @_threaded
+    def delete_correction(self, image_url: str, target_lang: str, box: Box, original: str) -> int:
+        """Efface la correction de la bulle ; renvoie le nombre de corrections supprimées."""
+        removed = self._delete_correction(sha1(image_url), target_lang, box, original)
+        self._db.commit()
+        return removed
 
     # --- Glossaires ---
 
@@ -446,7 +643,8 @@ class Cache:
 
     @_threaded
     def clear(self, series_id: str | None = None) -> int:
-        """Vide le cache (OCR et traductions ; les glossaires sont conservés)."""
+        """Vide le cache (OCR et traductions ; les glossaires et les corrections sont
+        conservés)."""
         if series_id is None:
             removed = self._db.execute("DELETE FROM translation").rowcount
             removed += self._db.execute("DELETE FROM ocr").rowcount
