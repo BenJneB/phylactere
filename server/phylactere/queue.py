@@ -28,6 +28,9 @@ class PriorityRunner:
         self._order = itertools.count()
         self._futures: dict[str, asyncio.Future] = {}
         self._factories: dict[str, Callable[[], Awaitable[Any]]] = {}
+        # Meilleure priorité demandée pour chaque tâche en file (statistiques).
+        self._priorities: dict[str, int] = {}
+        self._running = False
         self._worker: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -49,20 +52,34 @@ class PriorityRunner:
             self._factories[key] = factory
         # Une nouvelle entrée par demande : une demande « visible » fait passer devant une
         # tâche déjà en file en « prefetch » (l'entrée obsolète sera ignorée).
-        self._queue.put_nowait((PRIORITY_ORDER[priority], next(self._order), key))
+        order = PRIORITY_ORDER[priority]
+        if key in self._factories:
+            self._priorities[key] = min(order, self._priorities.get(key, order))
+        self._queue.put_nowait((order, next(self._order), key))
         # shield : si le client abandonne, la tâche continue pour les autres demandeurs.
         return await asyncio.shield(future)
 
     def pending(self) -> int:
         return len(self._factories)
 
+    def snapshot(self) -> dict[str, int]:
+        """Tâches en file par priorité, et ``running`` : 1 si une tâche est en cours."""
+        counts = {name: 0 for name in PRIORITY_ORDER}
+        names = {order: name for name, order in PRIORITY_ORDER.items()}
+        for key in self._factories:
+            counts[names[self._priorities.get(key, PRIORITY_ORDER["background"])]] += 1
+        counts["running"] = int(self._running)
+        return counts
+
     async def _run(self) -> None:
         while True:
             _, _, key = await self._queue.get()
             factory = self._factories.pop(key, None)
+            self._priorities.pop(key, None)
             future = self._futures.get(key)
             if factory is None or future is None:
                 continue  # déjà traitée (entrée en double)
+            self._running = True
             try:
                 result = await factory()
             except asyncio.CancelledError:
@@ -76,6 +93,7 @@ class PriorityRunner:
                     future.set_result(result)
             finally:
                 self._futures.pop(key, None)
+                self._running = False
             # Évite l'avertissement « exception never retrieved » si tous les demandeurs
             # ont abandonné.
             if future.done() and not future.cancelled():

@@ -530,6 +530,25 @@ def test_popup_saves_translate_mode(browser):
     assert stored == {"translateMode": "scroll", "lookahead": 20}
 
 
+def test_popup_shows_stats(browser, server):
+    """Jalon 12 : taille du cache sur le bouton, statistiques dans la section repliable."""
+    context, worker = browser
+    server.start()
+    configure(worker, server.port, server.token, "scroll", lookahead=1)
+    episode = open_episode(context)
+    expect(bubble_on(episode, 66, 1)).to_be_visible(timeout=15_000)
+
+    extension_id = worker.url.split("/")[2]
+    page = context.new_page()
+    page.goto(f"chrome-extension://{extension_id}/popup.html")
+    expect(page.locator("#clear")).to_have_text(re.compile(r"Vider tout le cache \(.+ Mo\)"))
+    page.click("#statsBox summary")
+    stats = page.locator("#stats")
+    expect(stats).to_contain_text("sur 500 Mo")
+    expect(stats).to_contain_text(re.compile(r"[1-9]\d* image\(s\) servie\(s\)"))
+    expect(stats).to_contain_text("en moyenne")
+
+
 def test_glossary_page_suggests_saves_and_retranslates(browser, server, world):
     """Jalon 10 : propositions du modèle (terme inventé écarté), ajout de la sélection,
     enregistrement, puis l'onglet de l'épisode se retraduit avec le glossaire."""

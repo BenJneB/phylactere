@@ -1,7 +1,9 @@
 import asyncio
+import sqlite3
 
 import pytest
 
+from phylactere import cache as cache_module
 from phylactere.cache import Cache, GlossaryEntry, TranslatedBlock, TranslationResult
 from phylactere.schemas import Box, Bubble, ImageSize, OcrResult
 
@@ -180,3 +182,115 @@ def test_series_bubbles_start_with_the_given_episode(cache, monkeypatch):
         ("c1", "C1"),
     ]
     assert run(cache.series_bubbles("vide", "fr", None, 10)) == []
+
+
+# --- Taille bornée (jalon 12) ---
+
+
+def big_result(seed: int) -> TranslationResult:
+    """Traduction d'environ 20 ko, incompressible pour SQLite (texte différent)."""
+    text = "".join(chr(0xAC00 + (seed * 7919 + i * 31) % 11172) for i in range(7000))
+    return result((text, str(seed)))
+
+
+def put_big(cache, i: int) -> None:
+    run(cache.put_translation(f"k{i}", "s", "1", i, "fr", "m", big_result(i)))
+
+
+def file_size(path) -> int:
+    wal = path.with_name(path.name + "-wal")
+    return path.stat().st_size + (wal.stat().st_size if wal.exists() else 0)
+
+
+def test_purge_removes_least_recently_used(tmp_path, monkeypatch):
+    path = tmp_path / "cache.sqlite3"
+    c = Cache(path, max_bytes=600_000)
+    monkeypatch.setattr(cache_module, "PURGE_EVERY", 10**9)  # purge appelée à la main
+    run(c.put_glossary("s", [GlossaryEntry(ko="가", fr="A")]))
+    for i in range(60):
+        put_big(c, i)
+    run(c.get_translation("k0"))  # k0 devient la plus récemment utilisée
+
+    removed = run(c.purge())
+
+    stats = run(c.stats())
+    assert removed > 0
+    assert stats["size_bytes"] <= 600_000 * cache_module.PURGE_TARGET
+    assert run(c.get_translation("k0")) is not None
+    assert run(c.get_translation("k1")) is None  # la moins récemment utilisée
+    assert run(c.get_translation("k59")) is not None
+    assert run(c.get_glossary("s")) == [GlossaryEntry(ko="가", fr="A")]
+    c.close()
+    assert file_size(path) <= 700_000  # la place est rendue au disque
+
+
+def test_purge_runs_every_n_writes(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache_module, "PURGE_EVERY", 5)
+    c = Cache(tmp_path / "cache.sqlite3", max_bytes=300_000)
+    for i in range(60):
+        put_big(c, i)
+    # Au plus PURGE_EVERY - 1 écritures depuis la dernière purge.
+    assert run(c.stats())["size_bytes"] <= 300_000 + 5 * 25_000
+    assert run(c.get_translation("k59")) is not None
+    c.close()
+
+
+def test_no_limit_keeps_everything(tmp_path):
+    c = Cache(tmp_path / "cache.sqlite3")
+    for i in range(30):
+        put_big(c, i)
+    assert run(c.purge()) == 0
+    assert run(c.stats())["translations"] == 30
+    c.close()
+
+
+def test_old_database_gets_used_column_and_incremental_vacuum(tmp_path):
+    """Base d'avant le jalon 12 : pas de colonne used, pas d'auto_vacuum."""
+    path = tmp_path / "cache.sqlite3"
+    db = sqlite3.connect(path)
+    db.executescript(
+        """
+        CREATE TABLE ocr (key TEXT PRIMARY KEY, series_id TEXT, result TEXT NOT NULL,
+                          created REAL NOT NULL);
+        CREATE TABLE translation (key TEXT PRIMARY KEY, series_id TEXT NOT NULL,
+            episode_id TEXT NOT NULL, image_index INTEGER NOT NULL, target_lang TEXT NOT NULL,
+            model TEXT NOT NULL, result TEXT NOT NULL, created REAL NOT NULL);
+        """
+    )
+    db.execute(
+        "INSERT INTO translation VALUES ('old', 's', '1', 0, 'fr', 'm', ?, 123.0)",
+        (result(("가", "A")).model_dump_json(),),
+    )
+    db.commit()
+    db.close()
+
+    c = Cache(path)
+    assert run(c.get_translation("old")) == result(("가", "A"))
+    put(c, 1, ("나", "B"))
+    c.close()
+
+    db = sqlite3.connect(path)
+    assert db.execute("PRAGMA auto_vacuum").fetchone() == (2,)
+    used = dict(db.execute("SELECT key, used FROM translation"))
+    db.close()
+    assert used["old"] > 123.0  # mis à jour par la lecture
+    assert used["s661frm"] is not None
+
+
+def test_clear_gives_space_back(tmp_path):
+    path = tmp_path / "cache.sqlite3"
+    c = Cache(path)
+    for i in range(40):
+        put_big(c, i)
+    before = run(c.stats())["size_bytes"]
+    run(c.clear())
+    assert run(c.stats())["size_bytes"] < before / 10
+    c.close()
+
+
+def test_stats_counts(cache):
+    put(cache, 0, ("가", "A"))
+    run(cache.put_glossary("s", [GlossaryEntry(ko="나", fr="B")]))
+    stats = run(cache.stats())
+    assert (stats["ocr"], stats["translations"], stats["glossaries"]) == (0, 1, 1)
+    assert stats["max_bytes"] == 0

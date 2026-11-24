@@ -136,3 +136,37 @@ def test_background_served_after_prefetch():
 
     asyncio.run(go())
     assert order == ["bloque", "v1", "p1", "fond"]
+
+
+def test_snapshot_counts_pending_by_best_priority():
+    async def go():
+        runner = PriorityRunner("test")
+        gate = asyncio.Event()
+
+        async def blocked():
+            await gate.wait()
+
+        async def quick():
+            return None
+
+        runner.start()
+        tasks = [asyncio.create_task(runner.run("bloque", "visible", blocked))]
+        await asyncio.sleep(0)  # le worker prend « bloque »
+        tasks += [
+            asyncio.create_task(runner.run("p1", "prefetch", quick)),
+            asyncio.create_task(runner.run("p2", "prefetch", quick)),
+            asyncio.create_task(runner.run("p2", "visible", quick)),  # promue
+            asyncio.create_task(runner.run("b1", "background", quick)),
+        ]
+        await asyncio.sleep(0)
+        during = runner.snapshot()
+        gate.set()
+        await asyncio.gather(*tasks)
+        after = runner.snapshot()
+        await runner.stop()
+        return during, after
+
+    during, after = asyncio.run(go())
+
+    assert during == {"visible": 1, "prefetch": 1, "background": 1, "running": 1}
+    assert after == {"visible": 0, "prefetch": 0, "background": 0, "running": 0}

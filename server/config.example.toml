@@ -92,6 +92,9 @@ max_center_offset = 0.6
 # Fichier SQLite du cache ; vide = dossier de cache de l'utilisateur
 # (Windows : %LOCALAPPDATA%\phylactere\Cache\cache.sqlite3)
 path = ""
+# Taille maximale du cache, en Mo (0 = sans limite). Au-delà, les images lues le moins
+# récemment sont oubliées (à refaire si on les relit) ; les glossaires ne le sont jamais.
+max_mb = 500
 
 [fetch]
 # Seuls ces hôtes sont autorisés (HTTPS uniquement)

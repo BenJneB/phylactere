@@ -44,6 +44,11 @@
   #status { min-height: 18px; margin-top: 10px; font-size: 12px; }
   .ok { color: var(--ok); } .err { color: var(--err); }
   [hidden] { display: none !important; }
+  details { margin-top: 12px; font-size: 12px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  #stats { margin: 6px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+  #stats dt { color: var(--muted); }
+  #stats dd { margin: 0; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -105,6 +110,10 @@
   <button id="glossary" class="primary wide" hidden>Glossaire de cette série</button>
   <button id="clearSeries" class="secondary wide" hidden>Vider le cache de cette série</button>
   <div id="status"></div>
+  <details id="statsBox" hidden>
+    <summary>Statistiques</summary>
+    <dl id="stats"><dt>…</dt><dd></dd></dl>
+  </details>
   <div class="hint">Sur la page : Alt+T ou clic sur le badge pour revoir l’original, clic sur une bulle pour la masquer.</div>
 
   <script src="defaults.js"></script>
