@@ -22,12 +22,12 @@ Configuration conseillée : Windows 10 ou 11 (64 bits), carte NVIDIA avec 8 Go d
 Télécharger et lancer [`OllamaSetup.exe`](https://ollama.com/download/windows), puis, dans un terminal PowerShell :
 
 ```powershell
-ollama pull qwen3.5:9b
+ollama pull gemma4:e4b
 ```
 
 Ollama démarre ensuite tout seul à l'ouverture de session et n'écoute qu'en local (`127.0.0.1:11434`) ; ne pas définir `OLLAMA_HOST=0.0.0.0`, qui l'exposerait sur le réseau. Vérification : `Invoke-RestMethod http://127.0.0.1:11434/api/tags` liste le modèle.
 
-Carte de moins de 8 Go : prendre plutôt `qwen3.5:4b` (voir « Modèle de traduction »).
+Carte de moins de 8 Go, ou traduction lente : prendre plutôt `qwen3.5:4b` (voir « Modèle de traduction »).
 
 ### 2. Le serveur
 
@@ -140,11 +140,20 @@ Le glossaire est remplacé en entier à chaque envoi. Lecture : `Invoke-RestMeth
 
 ## Modèle de traduction
 
-Le modèle par défaut est **`qwen3.5:9b`**. Les candidats ont été départagés au jalon 4 par comparaison de 8 modèles sur 40 images d'un épisode (57 bulles), avec relecture à l'aveugle (2 points par bulle juste, 1 par bulle approximative, 0 si fausse ; maximum 114). Les mesures ont été faites sur un PC portable avec une RTX 3070 Laptop (8 Go), OCR chargé en même temps. Le choix final s'est fait au jalon 5, en lisant de vrais épisodes avec l'extension sur ce même PC : `qwen3.5:9b` y traduit mieux, et ses traductions plus concises tiennent dans les bulles avec une police lisible.
+Le modèle par défaut est **`gemma4:e4b`** depuis le jalon 20. Au banc d'essai, sur 40 images de deux épisodes de séries et de genres différents (action, fantastique historique), relus à l'aveugle comme au jalon 4 :
+
+| Modèle | 729047-66 (sur 112) | 851689-1 (sur 108) | Vitesse (s/image) |
+|---|---|---|---|
+| **`gemma4:e4b`** (défaut) | **77** | **84** | 2,2 à 3,5 |
+| `qwen3.5:9b` | 55 | 67 | 1,5 à 5,3 |
+
+`gemma4:e4b` tient entièrement sur le GPU d'une RTX 3070 Laptop (8 Go). Sa mémoire vidéo avec l'OCR chargé en même temps n'a pas encore été relevée : si la traduction ralentit en cours de lecture, voir « Carte de 8 Go » ci-dessous. Les écarts de vitesse viennent d'une carte bridée pendant une des séries.
+
+Avant le jalon 20, le défaut était `qwen3.5:9b`. Les candidats avaient été départagés au jalon 4 par comparaison de 8 modèles sur 40 images d'un épisode (57 bulles), avec relecture à l'aveugle (2 points par bulle juste, 1 par bulle approximative, 0 si fausse ; maximum 114). Les mesures ont été faites sur un PC portable avec une RTX 3070 Laptop (8 Go), OCR chargé en même temps. Le choix final s'est fait au jalon 5, en lisant de vrais épisodes avec l'extension sur ce même PC : `qwen3.5:9b` y traduit mieux, et ses traductions plus concises tiennent dans les bulles avec une police lisible.
 
 | Modèle | Qualité (sur 114) | Vitesse (s/image) | Mémoire vidéo, OCR compris |
 |---|---|---|---|
-| **`qwen3.5:9b`** (défaut) | **64** | 1,4 (6,1 lors d'une série) | 6,5 Go |
+| **`qwen3.5:9b`** (défaut jusqu'au jalon 19) | **64** | 1,4 (6,1 lors d'une série) | 6,5 Go |
 | `qwen3.5:4b` | 57 à 59 | 1,2 à 1,5 | 4 Go |
 | `qwen3:8b` | 50 à 53 | 1,6 | 5,6 Go |
 | `gemma3:4b` | 47 | 1,8 | |
@@ -154,7 +163,7 @@ Le modèle par défaut est **`qwen3.5:9b`**. Les candidats ont été départagé
 
 Les vitesses viennent de plusieurs séries, faites dans des modes d'alimentation Windows différents ; elles indiquent un ordre de grandeur. Sur un PC portable, le mode **« Meilleures performances »** (Paramètres › Système › Alimentation) et le chargeur branché peuvent diviser le temps de traduction par 2 à 3.
 
-- **Carte de 8 Go** : `qwen3.5:9b` tient avec l'OCR (6,5 Go), mais sans grande marge. Si quelque chose d'autre occupe la mémoire vidéo, Windows déborde en silence dans la mémoire vive (« mémoire GPU partagée » dans le Gestionnaire des tâches) et la traduction devient plusieurs fois plus lente : c'est l'explication probable de la série à 6,1 s/image. Dans ce cas, passer à `qwen3.5:4b`.
+- **Carte de 8 Go** : `gemma4:e4b` tient sur le GPU ; `qwen3.5:9b` aussi, avec l'OCR (6,5 Go), mais sans grande marge. Si quelque chose d'autre occupe la mémoire vidéo, Windows déborde en silence dans la mémoire vive (« mémoire GPU partagée » dans le Gestionnaire des tâches) et la traduction devient plusieurs fois plus lente : c'est l'explication probable de la série à 6,1 s/image. Dans ce cas, passer à `qwen3.5:4b`.
 - **Carte de moins de 8 Go** : `qwen3.5:4b`.
 
 Pour changer de modèle : `ollama pull <modèle>`, puis le choisir dans le popup de l'extension, ou le fixer pour toutes les requêtes dans la configuration (voir ci-dessous) :
@@ -228,7 +237,7 @@ Ollama utilise le GPU de son côté, indépendamment de l'OCR : `ollama ps` affi
 1. `install-autostart.ps1 -Remove`, puis `stop.ps1` ;
 2. retirer l'extension du navigateur ;
 3. supprimer le dossier du dépôt et `%LOCALAPPDATA%\phylactere` (configuration, cache, modèles de l'OCR, journaux) ;
-4. facultatif : `ollama rm qwen3.5:9b`, puis désinstaller Ollama et uv.
+4. facultatif : `ollama rm gemma4:e4b` (et les autres modèles installés, `ollama list`), puis désinstaller Ollama et uv.
 
 ## Limites connues
 

@@ -28,6 +28,8 @@ from phylactere.naver import USER_AGENT, episode_image_urls
 def episode_images(source: str) -> tuple[str, str, list[str]]:
     """(série, épisode, URL des images dans l'ordre) depuis un dossier ou une URL d'épisode."""
     if source.startswith("https://"):
+        if urlsplit(source).hostname != "comic.naver.com":
+            raise SystemExit(f"URL refusée : le domaine doit être comic.naver.com ({source}).")
         query = parse_qs(urlsplit(source).query)
         series_id, episode_id = query["titleId"][0], query["no"][0]
         page = httpx.get(source, headers={"User-Agent": USER_AGENT}, timeout=20)
@@ -35,7 +37,10 @@ def episode_images(source: str) -> tuple[str, str, list[str]]:
         return series_id, episode_id, episode_image_urls(page.text, source, series_id, episode_id)
     folder = Path(source)
     series_id, _, episode_id = folder.name.partition("-")
-    return series_id, episode_id, (folder / "urls.txt").read_text(encoding="utf-8").split()
+    urls = (folder / "urls.txt").read_text(encoding="utf-8").split()
+    # Les anciens dossiers de samples/ listent aussi la vignette de l'épisode : on l'écarte,
+    # comme l'extension, pour que les indices d'image soient ceux du mode URL.
+    return series_id, episode_id, [url for url in urls if "/thumbnail_" not in url]
 
 
 def main() -> int:

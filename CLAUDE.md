@@ -7,7 +7,7 @@ Extension navigateur + serveur Python local qui traduisent en temps réel les we
 - **Tu travailles sur Ubuntu** (bash). Les commandes que tu lances sont des commandes Linux.
 - **Le produit final tourne sur Windows 10/11.** Tout le code doit rester multiplateforme, et les scripts livrés à l'utilisateur sont en PowerShell. Voir « Règles multiplateformes » dans `docs/SPEC.md` (section 7).
 - Python 3.12 géré avec uv dans `server/`. Ne pas utiliser le Python système ni pip global.
-- Ollama tourne sur 127.0.0.1:11434 sur les deux machines. Modèle de traduction : `qwen3.5:9b` par défaut (Windows, choisi au jalon 5, voir README), `qwen3.5:4b` sur Ubuntu via `config.dev.toml` (pas de GPU) ; `qwen3:1.7b` ne traduit pas, il romanise ; les tests n'appellent jamais Ollama (client simulé).
+- Ollama tourne sur 127.0.0.1:11434 sur les deux machines. Modèle de traduction : `gemma4:e4b` par défaut (Windows, choisi au jalon 20, voir README ; `qwen3.5:9b` avant), `qwen3.5:4b` sur Ubuntu via `config.dev.toml` (pas de GPU) ; `qwen3:1.7b` ne traduit pas, il romanise ; les tests n'appellent jamais Ollama (client simulé).
 - Sur Ubuntu, PaddleOCR tourne en mode CPU. Les mesures de performance (jalon 4) se font sur le PC Windows, pas ici.
 - Le code passe d'une machine à l'autre par git.
 - L'utilisateur est développeur mais découvre les extensions navigateur, l'OCR et les LLM locaux : ne pas expliquer les bases de la programmation, mais expliquer en français les notions propres à ces domaines (Manifest V3, content script / service worker, pipeline OCR, Ollama, sortie JSON structurée…) quand elles apparaissent. Préciser sur quelle machine (Ubuntu ou Windows) chaque vérification doit se faire.
@@ -86,5 +86,5 @@ L'extension (`extension`) est en JavaScript vanilla, sans build ni dépendance n
 - [x] Jalon 17 : cache (URL et nombre d'images, règle de choix unique, corrections à la lecture) et bouton d'export PDF
 - [x] Jalon 18 : découpage des gros fichiers (content.js, cache.py, pipeline.py), sans changement de comportement
 - [x] Jalon 19 : alerte quand la page de Naver n'est plus reconnue
-- [ ] Jalon 20 : mesure du second passage (et gemma4:e4b au banc)
-- [ ] Jalon 21 : second passage avec les bulles suivantes (conditionnel, selon le jalon 20)
+- [x] Jalon 20 : mesure du second passage (et gemma4:e4b au banc)
+- [ ] ~~Jalon 21 : second passage avec les bulles suivantes~~ (abandonné : aucun gain mesuré au jalon 20)
