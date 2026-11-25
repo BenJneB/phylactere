@@ -7,7 +7,7 @@
 log_level = "debug"
 
 [ollama]
-# La machine de dev n'a pas de GPU : modèle plus petit que le défaut (qwen3.5:9b).
+# La machine de dev n'a pas de GPU : modèle plus petit que le défaut (gemma4:e4b).
 # qwen3:1.7b ne traduit pas : il romanise le coréen. Installation : ollama pull qwen3.5:4b
 model = "qwen3.5:4b"
 
